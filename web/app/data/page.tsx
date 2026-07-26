@@ -89,6 +89,13 @@ const rub = (value: string) =>
     maximumFractionDigits: 2,
   }).format(Number(value));
 
+const eur = (value: number) =>
+  new Intl.NumberFormat("ru-RU", {
+    style: "currency",
+    currency: "EUR",
+    maximumFractionDigits: 2,
+  }).format(value);
+
 const date = (value: string | null) =>
   value
     ? new Intl.DateTimeFormat("ru-RU").format(new Date(`${value}T00:00:00`))
@@ -99,6 +106,7 @@ export default function LoadedDataPage() {
   const [payments, setPayments] = useState<PageResponse<Payment> | null>(null);
   const [deals, setDeals] = useState<PageResponse<Deal> | null>(null);
   const [aliases, setAliases] = useState<PageResponse<ClientAlias> | null>(null);
+  const [eurRate, setEurRate] = useState<{ rate: string; rate_date: string } | null>(null);
   const [selectedDealId, setSelectedDealId] = useState<number | null>(null);
   const [dealPayments, setDealPayments] = useState<Record<number, DealPayment[]>>({});
   const [dealPaymentsLoading, setDealPaymentsLoading] = useState<number | null>(null);
@@ -157,6 +165,12 @@ export default function LoadedDataPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    fetch(`${API_URL}/api/reference/eur-rate`)
+      .then((response) => response.ok ? response.json() : null)
+      .then((payload) => setEurRate(payload));
+  }, []);
 
   const current = dataset === "payments" ? payments : dataset === "deals" ? deals : aliases;
   const selectedDeal = deals?.items.find((item) => item.id === selectedDealId);
@@ -398,10 +412,11 @@ export default function LoadedDataPage() {
                     <th>Сумма сделки</th>
                     <th>Оплачено клиентом</th>
                     <th>Остаток</th>
+                    <th>Остаток, EUR</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {loading && <tr><td colSpan={7} className="review-empty">Загрузка…</td></tr>}
+                  {loading && <tr><td colSpan={8} className="review-empty">Загрузка…</td></tr>}
                   {!loading && deals?.items.map((item) => (
                       <tr
                         key={item.id}
@@ -435,6 +450,10 @@ export default function LoadedDataPage() {
                           <small>
                             {selectedDealId === item.id ? "Платежи показаны ниже" : "Выбрать сделку"}
                           </small>
+                        </td>
+                        <td>
+                          <strong>{eurRate ? eur(Number(item.balance_rub) / Number(eurRate.rate)) : "—"}</strong>
+                          {eurRate && <small>ЦБ: {rub(eurRate.rate)}</small>}
                         </td>
                       </tr>
                   ))}

@@ -1,8 +1,10 @@
 from contextlib import contextmanager
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 import os
 from typing import Literal
+from urllib.request import Request, urlopen
+from xml.etree import ElementTree
 
 import psycopg
 from fastapi import FastAPI, HTTPException, Query
@@ -35,6 +37,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+EUR_RATE_CACHE: tuple[datetime, dict] | None = None
+
 
 class StagingOperationUpdate(BaseModel):
     category: str | None = None
@@ -58,6 +62,33 @@ def database():
 
 def money(value: Decimal | None) -> str:
     return str(value or Decimal("0.00"))
+
+
+@app.get("/api/reference/eur-rate")
+def current_eur_rate() -> dict:
+    global EUR_RATE_CACHE
+    now = datetime.now(timezone.utc)
+    if EUR_RATE_CACHE and now - EUR_RATE_CACHE[0] < timedelta(hours=6):
+        return EUR_RATE_CACHE[1]
+    try:
+        request = Request(
+            "https://www.cbr.ru/scripts/XML_daily.asp",
+            headers={"User-Agent": "FinBG/1.0"},
+        )
+        with urlopen(request, timeout=12) as response:
+            root = ElementTree.fromstring(response.read())
+        eur = next(item for item in root.findall("Valute") if item.findtext("CharCode") == "EUR")
+        nominal = Decimal(eur.findtext("Nominal", "1").replace(",", "."))
+        value = Decimal(eur.findtext("Value", "0").replace(",", "."))
+        payload = {
+            "rate": money(value / nominal),
+            "rate_date": root.attrib.get("Date"),
+            "source": "ЦБ РФ",
+        }
+        EUR_RATE_CACHE = (now, payload)
+        return payload
+    except Exception as error:
+        raise HTTPException(status_code=503, detail="Не удалось получить курс EUR с сайта ЦБ РФ.") from error
 
 
 @app.get("/health")
