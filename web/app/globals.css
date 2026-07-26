@@ -415,7 +415,9 @@ td .progress + small { display: inline; }
 }
 .review-pagination button:disabled { cursor: default; opacity: .4; }
 
-.loaded-workspace { padding-bottom: 80px; }
+.loaded-workspace { padding-top: 16px; padding-bottom: 80px; }
+.loaded-workspace .loaded-topbar,
+.loaded-workspace .review-intro { display: none; }
 .loaded-workspace.deal-selected {
   height: 100vh;
   padding-top: 14px;
@@ -424,10 +426,6 @@ td .progress + small { display: inline; }
   flex-direction: column;
   overflow: hidden;
 }
-.deal-selected .loaded-topbar .eyebrow,
-.deal-selected .review-intro { display: none; }
-.deal-selected .loaded-topbar { min-height: 42px; }
-.deal-selected .loaded-topbar h1 { font-size: 25px; }
 .deal-selected .dataset-tabs { padding-top: 4px; }
 .deal-selected .dataset-tabs button { padding-top: 8px; padding-bottom: 8px; }
 .deal-selected .loaded-toolbar { padding-top: 8px; padding-bottom: 8px; }
@@ -539,7 +537,8 @@ td .progress + small { display: inline; }
 .data-badge.match-matched { background: var(--green-soft); color: var(--green); }
 .deals-table { min-width: 850px; width: 100%; table-layout: fixed; }
 .deals-table th,
-.deals-table td { padding-left: 10px; padding-right: 10px; }
+.deals-table td { padding: 8px; }
+.deals-table td small { margin-top: 2px; }
 .deals-table td:nth-child(1) { width: 24%; min-width: 0; }
 .deals-table td:nth-child(2) { width: 11%; min-width: 0; }
 .deals-table td:nth-child(3) { width: 13%; min-width: 0; }
