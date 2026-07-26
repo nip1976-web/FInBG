@@ -569,6 +569,35 @@ def loaded_deal_payments(deal_id: int) -> dict:
     }
 
 
+@app.get("/api/data/client-aliases")
+def payment_client_aliases(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=10, le=100),
+) -> dict:
+    offset = (page - 1) * page_size
+    with database() as connection:
+        total = connection.execute(
+            "select count(*) as total from payment_client_aliases"
+        ).fetchone()["total"]
+        rows = connection.execute(
+            """
+            select a.id, a.payment_name, c.name as buyer_name, a.status,
+                   a.evidence_type, a.evidence_count
+            from payment_client_aliases a
+            join counterparties c on c.id = a.counterparty_id
+            order by a.status, a.evidence_count desc, a.payment_name
+            limit %s offset %s
+            """,
+            [page_size, offset],
+        ).fetchall()
+    return {
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+        "items": [dict(row) for row in rows],
+    }
+
+
 @app.get("/api/data/payments/available")
 def available_payments_for_allocation(
     search: str | None = Query(default=None, max_length=200),

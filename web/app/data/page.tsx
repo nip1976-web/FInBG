@@ -5,7 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 const API_URL =
   process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
-type Dataset = "payments" | "deals";
+type Dataset = "payments" | "deals" | "aliases";
 type DealFilter = "all" | "open" | "closed" | "unmatched";
 
 type Payment = {
@@ -73,6 +73,15 @@ type AvailablePayment = {
   account_name: string;
 };
 
+type ClientAlias = {
+  id: number;
+  payment_name: string;
+  buyer_name: string;
+  status: "suggested" | "confirmed" | "rejected";
+  evidence_type: string;
+  evidence_count: number;
+};
+
 const rub = (value: string) =>
   new Intl.NumberFormat("ru-RU", {
     style: "currency",
@@ -89,6 +98,7 @@ export default function LoadedDataPage() {
   const [dataset, setDataset] = useState<Dataset>("payments");
   const [payments, setPayments] = useState<PageResponse<Payment> | null>(null);
   const [deals, setDeals] = useState<PageResponse<Deal> | null>(null);
+  const [aliases, setAliases] = useState<PageResponse<ClientAlias> | null>(null);
   const [selectedDealId, setSelectedDealId] = useState<number | null>(null);
   const [dealPayments, setDealPayments] = useState<Record<number, DealPayment[]>>({});
   const [dealPaymentsLoading, setDealPaymentsLoading] = useState<number | null>(null);
@@ -113,10 +123,11 @@ export default function LoadedDataPage() {
     if (search.trim()) params.set("search", search.trim());
 
     try {
-      const endpoint =
-        dataset === "payments"
-          ? "/api/data/payments"
-          : "/api/data/deals";
+      const endpoint = dataset === "payments"
+        ? "/api/data/payments"
+        : dataset === "deals"
+          ? "/api/data/deals"
+          : "/api/data/client-aliases";
       if (dataset === "deals" && dealFilter === "open") {
         params.set("financial_status", "open");
       }
@@ -134,7 +145,8 @@ export default function LoadedDataPage() {
       }
       const payload = await rowsResponse.json();
       if (dataset === "payments") setPayments(payload);
-      else setDeals(payload);
+      else if (dataset === "deals") setDeals(payload);
+      else setAliases(payload);
     } catch (requestError) {
       setError((requestError as Error).message);
     } finally {
@@ -146,7 +158,7 @@ export default function LoadedDataPage() {
     load();
   }, [load]);
 
-  const current = dataset === "payments" ? payments : deals;
+  const current = dataset === "payments" ? payments : dataset === "deals" ? deals : aliases;
   const selectedDeal = deals?.items.find((item) => item.id === selectedDealId);
   const totalPages = current
     ? Math.max(1, Math.ceil(current.total / current.page_size))
@@ -291,6 +303,14 @@ export default function LoadedDataPage() {
             >
               Сделки Buyers
             </button>
+            <button
+              className={dataset === "aliases" ? "active" : ""}
+              onClick={() => chooseDataset("aliases")}
+              role="tab"
+              aria-selected={dataset === "aliases"}
+            >
+              Соответствия клиентов
+            </button>
           </div>
 
           <div className="loaded-toolbar">
@@ -327,7 +347,7 @@ export default function LoadedDataPage() {
                 </select>
               </label>
             )}
-            <span>Найдено: <strong>{current?.total ?? 0}</strong></span>
+            <span>{dataset === "aliases" ? "Предложено" : "Найдено"}: <strong>{current?.total ?? 0}</strong></span>
           </div>
 
           {error && <div className="review-error">{error}</div>}
@@ -367,7 +387,7 @@ export default function LoadedDataPage() {
                   ))}
                 </tbody>
               </table>
-            ) : (
+            ) : dataset === "deals" ? (
               <table className="loaded-table deals-table">
                 <thead>
                   <tr>
@@ -417,6 +437,21 @@ export default function LoadedDataPage() {
                           </small>
                         </td>
                       </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <table className="loaded-table aliases-table">
+                <thead><tr><th>Как указано в Payments</th><th>Клиент в Buyers</th><th>Основание</th><th>Статус</th></tr></thead>
+                <tbody>
+                  {loading && <tr><td colSpan={4} className="review-empty">Загрузка…</td></tr>}
+                  {!loading && aliases?.items.map((item) => (
+                    <tr key={item.id}>
+                      <td><strong>{item.payment_name}</strong></td>
+                      <td><strong>{item.buyer_name}</strong></td>
+                      <td>Совпали дата и сумма оплаты · случаев: {item.evidence_count}</td>
+                      <td><span className="data-badge match-review">На проверку</span></td>
+                    </tr>
                   ))}
                 </tbody>
               </table>
