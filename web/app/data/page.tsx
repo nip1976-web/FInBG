@@ -369,16 +369,17 @@ export default function LoadedDataPage() {
               <table className="loaded-table deals-table">
                 <thead>
                   <tr>
-                    <th>Сделка</th>
                     <th>Покупатель</th>
                     <th>Документ</th>
-                    <th>Сумма / оплачено</th>
-                    <th>Остаток и состояние</th>
-                    <th>Связь с платежом</th>
+                    <th>Номер</th>
+                    <th>Дата документа</th>
+                    <th>Сумма сделки</th>
+                    <th>Оплачено клиентом</th>
+                    <th>Остаток</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {loading && <tr><td colSpan={6} className="review-empty">Загрузка…</td></tr>}
+                  {loading && <tr><td colSpan={7} className="review-empty">Загрузка…</td></tr>}
                   {!loading && deals?.items.map((item) => (
                       <tr
                         key={item.id}
@@ -393,41 +394,24 @@ export default function LoadedDataPage() {
                           }
                         }}
                       >
-                        <td>
-                          <strong>{item.deal_number}</strong>
-                          <small>от {date(item.opened_on)} · строка {item.source_row}</small>
-                        </td>
                         <td className="loaded-description">
                           <strong>{item.customer_name}</strong>
                         </td>
-                        <td className="loaded-description">
-                          <small>
-                            {item.original_document_type || "Документ"}{" "}
-                            {item.original_document_number || "—"} · {item.title}
-                          </small>
-                        </td>
+                        <td>{item.original_document_type || "Документ"}</td>
+                        <td>{item.original_document_number || "—"}</td>
+                        <td>{date(item.opened_on)}</td>
                         <td>
                           <strong>{rub(item.planned_revenue_rub)}</strong>
-                          <small>Оплачено: {rub(item.paid_amount_rub)}</small>
+                        </td>
+                        <td>
+                          <strong className="amount-inflow">{rub(item.paid_amount_rub)}</strong>
                         </td>
                         <td>
                           <strong className={item.financial_status === "open" ? "negative-text" : "amount-inflow"}>
                             {rub(item.balance_rub)}
                           </strong>
                           <small>
-                            {item.financial_status === "closed"
-                              ? "Сделка закрыта"
-                              : item.financial_status === "advance"
-                                ? "Получен аванс"
-                                : "Ожидается оплата"}
-                          </small>
-                        </td>
-                        <td>
-                          <span className={`data-badge match-${item.match_status}`}>
-                            {item.match_status === "matched" ? "Платёж найден" : "Нужна проверка"}
-                          </span>
-                          <small>
-                            {selectedDealId === item.id ? "Платежи показаны ниже" : "Показать платежи ниже"}
+                            {selectedDealId === item.id ? "Платежи показаны ниже" : "Выбрать сделку"}
                           </small>
                         </td>
                       </tr>
