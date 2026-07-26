@@ -134,3 +134,63 @@ def dashboard_summary(
         "receivables_rub": money(row["receivables"]),
         "payables_rub": money(row["payables"]),
     }
+
+
+@app.get("/api/imports/staging-summary")
+def staging_import_summary() -> dict:
+    with database() as connection:
+        latest_batch = connection.execute(
+            """
+            select id, source_file, imported_at, imported_rows, status, period_from
+            from import_batches
+            order by id desc
+            limit 1
+            """
+        ).fetchone()
+        rows = connection.execute(
+            """
+            select
+                source_sheet,
+                direction,
+                count(*) as operation_count,
+                sum(amount_rub) as total_amount_rub,
+                count(*) filter (where likely_internal_transfer) as internal_count,
+                coalesce(
+                    sum(amount_rub) filter (where likely_internal_transfer),
+                    0
+                ) as internal_amount_rub,
+                count(*) filter (where possible_duplicate) as duplicate_count,
+                count(*) filter (where validation_status = 'error') as error_count
+            from staging_payment_operations
+            group by source_sheet, direction
+            order by source_sheet
+            """
+        ).fetchall()
+
+    return {
+        "latest_batch": (
+            {
+                "id": latest_batch["id"],
+                "source_file": latest_batch["source_file"],
+                "imported_at": latest_batch["imported_at"].isoformat(),
+                "imported_rows": latest_batch["imported_rows"],
+                "status": latest_batch["status"],
+                "period_from": latest_batch["period_from"].isoformat(),
+            }
+            if latest_batch
+            else None
+        ),
+        "sheets": [
+            {
+                "source_sheet": row["source_sheet"],
+                "direction": row["direction"],
+                "operation_count": row["operation_count"],
+                "total_amount_rub": money(row["total_amount_rub"]),
+                "internal_count": row["internal_count"],
+                "internal_amount_rub": money(row["internal_amount_rub"]),
+                "duplicate_count": row["duplicate_count"],
+                "error_count": row["error_count"],
+            }
+            for row in rows
+        ],
+    }
