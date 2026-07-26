@@ -130,7 +130,7 @@ export default function LoadedDataPage() {
         params.set("financial_status", "closed");
       }
       if (dataset === "deals" && dealFilter === "unmatched") {
-        params.set("match_status", "unmatched");
+        params.set("without_match", "true");
       }
       const [summaryResponse, rowsResponse] = await Promise.all([
         fetch(`${API_URL}/api/data/summary`),

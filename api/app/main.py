@@ -395,6 +395,7 @@ def loaded_deals(
     page_size: int = Query(default=50, ge=10, le=100),
     financial_status: Literal["open", "closed", "advance"] | None = None,
     match_status: Literal["unmatched", "matched", "review"] | None = None,
+    without_match: bool = False,
     search: str | None = Query(default=None, max_length=200),
 ) -> dict:
     conditions = ["d.source = 'buyers'"]
@@ -405,6 +406,8 @@ def loaded_deals(
     if match_status:
         conditions.append("d.match_status = %s")
         params.append(match_status)
+    if without_match:
+        conditions.append("d.match_status <> 'matched'")
     if search and search.strip():
         term = f"%{search.strip()}%"
         conditions.append(
