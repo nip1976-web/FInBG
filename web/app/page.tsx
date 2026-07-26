@@ -61,6 +61,7 @@ const nav = [
   "Расходы",
   "Склад",
   "Отчёты",
+  "Импорт данных",
 ];
 
 const cashBars = [
@@ -113,15 +114,22 @@ export default function Home() {
 
         <nav aria-label="Основная навигация">
           {nav.map((item) => (
-            <button
-              className={active === item ? "nav-item active" : "nav-item"}
-              key={item}
-              onClick={() => setActive(item)}
-              type="button"
-            >
-              <span className="nav-dot" aria-hidden="true" />
-              {item}
-            </button>
+            item === "Импорт данных" ? (
+              <a className="nav-item" href="/imports" key={item}>
+                <span className="nav-dot" aria-hidden="true" />
+                {item}
+              </a>
+            ) : (
+              <button
+                className={active === item ? "nav-item active" : "nav-item"}
+                key={item}
+                onClick={() => setActive(item)}
+                type="button"
+              >
+                <span className="nav-dot" aria-hidden="true" />
+                {item}
+              </button>
+            )
           ))}
         </nav>
 

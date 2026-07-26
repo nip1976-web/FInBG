@@ -2,10 +2,12 @@ from contextlib import contextmanager
 from datetime import date
 from decimal import Decimal
 import os
+from typing import Literal
 
 import psycopg
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 from psycopg.rows import dict_row
 
 
@@ -32,6 +34,15 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
     allow_headers=["*"],
 )
+
+
+class StagingOperationUpdate(BaseModel):
+    category: str | None = None
+    likely_internal_transfer: bool | None = None
+    possible_duplicate: bool | None = None
+    validation_status: Literal[
+        "pending", "ready", "excluded", "error", "imported"
+    ] | None = None
 
 
 @contextmanager
@@ -166,6 +177,21 @@ def staging_import_summary() -> dict:
             order by source_sheet
             """
         ).fetchall()
+        overview = connection.execute(
+            """
+            select
+                count(*) as total_rows,
+                count(*) filter (
+                    where category is null or btrim(category) = ''
+                ) as missing_category_count,
+                count(*) filter (where likely_internal_transfer) as internal_count,
+                count(*) filter (where possible_duplicate) as duplicate_count,
+                count(*) filter (where validation_status = 'pending') as pending_count,
+                count(*) filter (where validation_status = 'ready') as ready_count,
+                count(*) filter (where validation_status = 'excluded') as excluded_count
+            from staging_payment_operations
+            """
+        ).fetchone()
 
     return {
         "latest_batch": (
@@ -180,6 +206,7 @@ def staging_import_summary() -> dict:
             if latest_batch
             else None
         ),
+        "overview": dict(overview),
         "sheets": [
             {
                 "source_sheet": row["source_sheet"],
@@ -194,3 +221,169 @@ def staging_import_summary() -> dict:
             for row in rows
         ],
     }
+
+
+@app.get("/api/imports/categories")
+def staging_categories() -> dict[str, list[str]]:
+    with database() as connection:
+        rows = connection.execute(
+            """
+            select category
+            from (
+                select distinct category
+                from staging_payment_operations
+                where category is not null and btrim(category) <> ''
+                union
+                select name as category
+                from expense_categories
+                where is_active
+            ) categories
+            order by category
+            """
+        ).fetchall()
+    return {"items": [row["category"] for row in rows]}
+
+
+@app.get("/api/imports/operations")
+def staging_operations(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=10, le=100),
+    source_sheet: str | None = None,
+    direction: Literal["inflow", "outflow"] | None = None,
+    validation_status: Literal[
+        "pending", "ready", "excluded", "error", "imported"
+    ] | None = None,
+    only_internal: bool = False,
+    only_duplicates: bool = False,
+    missing_category: bool = False,
+    search: str | None = Query(default=None, max_length=200),
+) -> dict:
+    conditions: list[str] = []
+    params: list[object] = []
+
+    if source_sheet:
+        conditions.append("source_sheet = %s")
+        params.append(source_sheet)
+    if direction:
+        conditions.append("direction = %s")
+        params.append(direction)
+    if validation_status:
+        conditions.append("validation_status = %s")
+        params.append(validation_status)
+    if only_internal:
+        conditions.append("likely_internal_transfer")
+    if only_duplicates:
+        conditions.append("possible_duplicate")
+    if missing_category:
+        conditions.append("(category is null or btrim(category) = '')")
+    if search and search.strip():
+        term = f"%{search.strip()}%"
+        conditions.append(
+            """
+            (
+                counterparty ilike %s
+                or explanation ilike %s
+                or category ilike %s
+                or source_sheet ilike %s
+            )
+            """
+        )
+        params.extend([term, term, term, term])
+
+    where_sql = f"where {' and '.join(conditions)}" if conditions else ""
+    offset = (page - 1) * page_size
+
+    with database() as connection:
+        total = connection.execute(
+            f"select count(*) as total from staging_payment_operations {where_sql}",
+            params,
+        ).fetchone()["total"]
+        rows = connection.execute(
+            f"""
+            select
+                id,
+                source_sheet,
+                source_row,
+                direction,
+                sequence_number,
+                account_code,
+                counterparty,
+                amount_rub,
+                operation_date,
+                explanation,
+                payment_basis,
+                client,
+                category,
+                plan_code,
+                manager,
+                likely_internal_transfer,
+                possible_duplicate,
+                validation_status,
+                validation_errors
+            from staging_payment_operations
+            {where_sql}
+            order by operation_date desc, id desc
+            limit %s offset %s
+            """,
+            [*params, page_size, offset],
+        ).fetchall()
+
+    return {
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+        "items": [
+            {
+                **dict(row),
+                "amount_rub": money(row["amount_rub"]),
+                "operation_date": row["operation_date"].isoformat(),
+            }
+            for row in rows
+        ],
+    }
+
+
+@app.patch("/api/imports/operations/{operation_id}")
+def update_staging_operation(
+    operation_id: int,
+    update: StagingOperationUpdate,
+) -> dict:
+    fields = update.model_fields_set
+    assignments: list[str] = []
+    params: list[object] = []
+    allowed = {
+        "category": "category",
+        "likely_internal_transfer": "likely_internal_transfer",
+        "possible_duplicate": "possible_duplicate",
+        "validation_status": "validation_status",
+    }
+
+    for field, column in allowed.items():
+        if field not in fields:
+            continue
+        value = getattr(update, field)
+        if field == "category" and isinstance(value, str):
+            value = value.strip() or None
+        assignments.append(f"{column} = %s")
+        params.append(value)
+
+    if not assignments:
+        return {"updated": False, "id": operation_id}
+
+    params.append(operation_id)
+    with database() as connection:
+        row = connection.execute(
+            f"""
+            update staging_payment_operations
+            set {', '.join(assignments)},
+                updated_at = now()
+            where id = %s
+            returning id, category, likely_internal_transfer,
+                      possible_duplicate, validation_status
+            """,
+            params,
+        ).fetchone()
+
+    if not row:
+        return {"updated": False, "id": operation_id}
+    return {"updated": True, **dict(row)}
