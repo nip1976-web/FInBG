@@ -658,7 +658,7 @@ def deal_candidate_payments(deal_id: int) -> dict:
     with database() as connection:
         deal = connection.execute(
             """
-            select d.id, c.name as customer_name
+            select d.id, c.id as counterparty_id, c.name as customer_name
             from deals d
             join counterparties c on c.id = d.customer_id
             where d.id = %s and d.source = 'buyers'
@@ -700,6 +700,13 @@ def deal_candidate_payments(deal_id: int) -> dict:
                   regexp_replace(lower(p.raw_counterparty), '[^[:alnum:]]', '', 'g')
                   in regexp_replace(lower(%(customer_name)s), '[^[:alnum:]]', '', 'g')
                 ) > 0
+                or exists (
+                  select 1
+                  from payment_client_aliases alias
+                  where alias.counterparty_id = %(counterparty_id)s
+                    and alias.status = 'confirmed'
+                    and lower(alias.payment_name) = lower(p.raw_counterparty)
+                )
               )
             group by p.id, a.name
             having p.amount_rub - coalesce(sum(pa.allocated_amount_rub), 0) > 0
@@ -707,6 +714,7 @@ def deal_candidate_payments(deal_id: int) -> dict:
             """,
             {
                 "deal_id": deal_id,
+                "counterparty_id": deal["counterparty_id"],
                 "customer_name": deal["customer_name"],
             },
         ).fetchall()

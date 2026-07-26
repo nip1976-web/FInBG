@@ -450,7 +450,9 @@ export default function LoadedDataPage() {
                       <td><strong>{item.payment_name}</strong></td>
                       <td><strong>{item.buyer_name}</strong></td>
                       <td>Совпали дата и сумма оплаты · случаев: {item.evidence_count}</td>
-                      <td><span className="data-badge match-review">На проверку</span></td>
+                      <td><span className={`data-badge ${item.status === "confirmed" ? "match-matched" : "match-review"}`}>
+                        {item.status === "confirmed" ? "Подтверждено" : "На проверку"}
+                      </span></td>
                     </tr>
                   ))}
                 </tbody>
