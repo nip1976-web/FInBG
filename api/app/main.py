@@ -629,7 +629,7 @@ def deal_candidate_payments(deal_id: int) -> dict:
     with database() as connection:
         deal = connection.execute(
             """
-            select d.id, c.name as customer_name, d.original_document_number
+            select d.id, c.name as customer_name
             from deals d
             join counterparties c on c.id = d.customer_id
             where d.id = %s and d.source = 'buyers'
@@ -661,24 +661,16 @@ def deal_candidate_payments(deal_id: int) -> dict:
                 select 1 from payment_allocations current_link
                 where current_link.payment_id = p.id and current_link.deal_id = %(deal_id)s
               )
+              and coalesce(p.raw_counterparty, '') <> ''
               and (
-                (
-                  coalesce(p.raw_counterparty, '') <> ''
-                  and (
-                    position(
-                      regexp_replace(lower(%(customer_name)s), '[^[:alnum:]]', '', 'g')
-                      in regexp_replace(lower(p.raw_counterparty), '[^[:alnum:]]', '', 'g')
-                    ) > 0
-                    or position(
-                      regexp_replace(lower(p.raw_counterparty), '[^[:alnum:]]', '', 'g')
-                      in regexp_replace(lower(%(customer_name)s), '[^[:alnum:]]', '', 'g')
-                    ) > 0
-                  )
-                )
-                or (
-                  coalesce(%(document_number)s, '') <> ''
-                  and lower(coalesce(p.description, '')) like '%%' || lower(%(document_number)s) || '%%'
-                )
+                position(
+                  regexp_replace(lower(%(customer_name)s), '[^[:alnum:]]', '', 'g')
+                  in regexp_replace(lower(p.raw_counterparty), '[^[:alnum:]]', '', 'g')
+                ) > 0
+                or position(
+                  regexp_replace(lower(p.raw_counterparty), '[^[:alnum:]]', '', 'g')
+                  in regexp_replace(lower(%(customer_name)s), '[^[:alnum:]]', '', 'g')
+                ) > 0
               )
             group by p.id, a.name
             having p.amount_rub - coalesce(sum(pa.allocated_amount_rub), 0) > 0
@@ -687,7 +679,6 @@ def deal_candidate_payments(deal_id: int) -> dict:
             {
                 "deal_id": deal_id,
                 "customer_name": deal["customer_name"],
-                "document_number": deal["original_document_number"],
             },
         ).fetchall()
 

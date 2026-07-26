@@ -162,6 +162,8 @@ export default function LoadedDataPage() {
 
   const loadCandidatePayments = async (dealId: number) => {
     setCandidatePaymentsLoading(true);
+    setCandidatePayments([]);
+    setAllocationAmounts({});
     setManualError("");
     try {
       const response = await fetch(`${API_URL}/api/data/deals/${dealId}/candidate-payments`);
