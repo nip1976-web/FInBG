@@ -5,7 +5,7 @@ import os
 from typing import Literal
 
 import psycopg
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from psycopg.rows import dict_row
@@ -43,6 +43,11 @@ class StagingOperationUpdate(BaseModel):
     validation_status: Literal[
         "pending", "ready", "excluded", "error", "imported"
     ] | None = None
+
+
+class ManualPaymentAllocationCreate(BaseModel):
+    payment_id: int
+    allocated_amount_rub: Decimal
 
 
 @contextmanager
@@ -562,6 +567,123 @@ def loaded_deal_payments(deal_id: int) -> dict:
             for row in rows
         ],
     }
+
+
+@app.get("/api/data/payments/available")
+def available_payments_for_allocation(
+    search: str | None = Query(default=None, max_length=200),
+    page_size: int = Query(default=500, ge=10, le=500),
+) -> dict:
+    conditions = [
+        "p.source = 'payment_battery'",
+        "p.direction = 'inflow'",
+    ]
+    params: list[object] = []
+    if search and search.strip():
+        term = f"%{search.strip()}%"
+        conditions.append(
+            "(p.raw_counterparty ilike %s or p.description ilike %s)"
+        )
+        params.extend([term, term])
+
+    with database() as connection:
+        rows = connection.execute(
+            f"""
+            select
+                p.id,
+                p.payment_date,
+                p.amount_rub,
+                p.raw_counterparty,
+                p.description,
+                a.name as account_name,
+                coalesce(sum(pa.allocated_amount_rub), 0) as allocated_amount_rub,
+                p.amount_rub - coalesce(sum(pa.allocated_amount_rub), 0) as available_amount_rub
+            from payments p
+            join financial_accounts a on a.id = p.account_id
+            left join payment_allocations pa on pa.payment_id = p.id
+            where {' and '.join(conditions)}
+            group by p.id, a.name
+            having p.amount_rub - coalesce(sum(pa.allocated_amount_rub), 0) > 0
+            order by p.payment_date desc, p.id desc
+            limit %s
+            """,
+            [*params, page_size],
+        ).fetchall()
+
+    return {
+        "items": [
+            {
+                **dict(row),
+                "payment_date": row["payment_date"].isoformat(),
+                "amount_rub": money(row["amount_rub"]),
+                "allocated_amount_rub": money(row["allocated_amount_rub"]),
+                "available_amount_rub": money(row["available_amount_rub"]),
+            }
+            for row in rows
+        ]
+    }
+
+
+@app.post("/api/data/deals/{deal_id}/payments")
+def create_manual_payment_allocation(
+    deal_id: int, payload: ManualPaymentAllocationCreate
+) -> dict:
+    if payload.allocated_amount_rub <= 0:
+        raise HTTPException(status_code=422, detail="Сумма распределения должна быть больше нуля.")
+
+    with database() as connection:
+        deal = connection.execute(
+            "select id from deals where id = %s and source = 'buyers'",
+            [deal_id],
+        ).fetchone()
+        if deal is None:
+            raise HTTPException(status_code=404, detail="Сделка не найдена.")
+
+        payment = connection.execute(
+            """
+            select id, amount_rub
+            from payments
+            where id = %s and source = 'payment_battery' and direction = 'inflow'
+            for update
+            """,
+            [payload.payment_id],
+        ).fetchone()
+        if payment is None:
+            raise HTTPException(status_code=404, detail="Входящий платёж не найден.")
+
+        existing = connection.execute(
+            "select id from payment_allocations where payment_id = %s and deal_id = %s",
+            [payload.payment_id, deal_id],
+        ).fetchone()
+        if existing:
+            raise HTTPException(status_code=409, detail="Этот платёж уже связан со сделкой.")
+
+        allocated = connection.execute(
+            "select coalesce(sum(allocated_amount_rub), 0) as amount from payment_allocations where payment_id = %s",
+            [payload.payment_id],
+        ).fetchone()["amount"]
+        available = payment["amount_rub"] - allocated
+        if payload.allocated_amount_rub > available:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Доступно для распределения: {money(available)} ₽.",
+            )
+
+        allocation = connection.execute(
+            """
+            insert into payment_allocations (
+                payment_id, deal_id, allocated_amount_rub, source, match_confidence
+            ) values (%s, %s, %s, 'manual', 'manual')
+            returning id
+            """,
+            [payload.payment_id, deal_id, payload.allocated_amount_rub],
+        ).fetchone()
+        connection.execute(
+            "update deals set match_status = 'matched' where id = %s",
+            [deal_id],
+        )
+
+    return {"id": allocation["id"], "available_amount_rub": money(available - payload.allocated_amount_rub)}
 
 
 @app.get("/api/imports/staging-summary")

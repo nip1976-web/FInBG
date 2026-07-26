@@ -567,6 +567,57 @@ td .progress + small { display: inline; }
 .deal-payments-panel p { color: var(--muted); font-size: 10px; }
 .deal-payments-title > span { max-width: 42%; text-align: right; }
 .deal-payments-panel p { margin: 0; padding: 18px 14px; }
+.manual-link-action {
+  padding: 10px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-soft);
+}
+.manual-link-action span,
+.manual-link-form label > span,
+.manual-link-form small { color: var(--muted); font-size: 10px; }
+.manual-link-action button,
+.manual-link-buttons button,
+.manual-search-row button {
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--foreground);
+  font-size: 10px;
+  font-weight: 650;
+}
+.manual-link-form {
+  padding: 12px 14px;
+  display: grid;
+  grid-template-columns: minmax(180px, 1.1fr) minmax(280px, 2fr) 140px auto;
+  align-items: end;
+  gap: 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-soft);
+}
+.manual-link-form label > span { display: block; margin-bottom: 5px; }
+.manual-link-form input,
+.manual-link-form select {
+  width: 100%;
+  height: 34px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--foreground);
+  font: inherit;
+  font-size: 10px;
+}
+.manual-search-row { display: flex; gap: 5px; }
+.manual-search-row input { min-width: 0; }
+.manual-link-buttons { display: flex; gap: 6px; }
+.manual-link-buttons .manual-save { border-color: var(--green); background: var(--green); color: white; }
+.manual-link-buttons button:disabled { opacity: .55; cursor: default; }
+.manual-link-error { grid-column: 1 / -1; color: var(--red); font-size: 10px; }
 .deal-payments-panel article {
   padding: 12px 14px;
   display: grid;
@@ -590,6 +641,8 @@ td .progress + small { display: inline; }
   .dashboard-grid { grid-template-columns: 1fr; }
   .review-metrics { grid-template-columns: repeat(2, 1fr); }
   .loaded-summary { grid-template-columns: 1fr; }
+  .manual-link-form { grid-template-columns: 1fr 1fr; }
+  .manual-link-buttons { grid-column: 1 / -1; }
 }
 @media (max-width: 720px) {
   .app-shell { grid-template-columns: 1fr; }
@@ -603,6 +656,8 @@ td .progress + small { display: inline; }
   .deal-selected .loaded-panel { display: block; }
   .deal-selected .loaded-table-wrap { overflow-x: auto; }
   .deal-selected .deal-payments-panel { margin-top: 18px; border: 1px solid var(--line); border-radius: 11px; }
+  .manual-link-action { align-items: flex-start; flex-direction: column; }
+  .manual-link-form { grid-template-columns: 1fr; }
   .topbar { align-items: flex-start; flex-direction: column; }
   .topbar-actions { width: 100%; flex-wrap: wrap; }
   .primary-button { flex: 1; }
