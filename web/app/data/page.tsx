@@ -370,14 +370,15 @@ export default function LoadedDataPage() {
                 <thead>
                   <tr>
                     <th>Сделка</th>
-                    <th>Покупатель и документ</th>
+                    <th>Покупатель</th>
+                    <th>Документ</th>
                     <th>Сумма / оплачено</th>
                     <th>Остаток и состояние</th>
                     <th>Связь с платежом</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {loading && <tr><td colSpan={5} className="review-empty">Загрузка…</td></tr>}
+                  {loading && <tr><td colSpan={6} className="review-empty">Загрузка…</td></tr>}
                   {!loading && deals?.items.map((item) => (
                       <tr
                         key={item.id}
@@ -398,6 +399,8 @@ export default function LoadedDataPage() {
                         </td>
                         <td className="loaded-description">
                           <strong>{item.customer_name}</strong>
+                        </td>
+                        <td className="loaded-description">
                           <small>
                             {item.original_document_type || "Документ"}{" "}
                             {item.original_document_number || "—"} · {item.title}

@@ -528,10 +528,11 @@ td .progress + small { display: inline; }
 .data-badge.match-review { background: var(--orange-soft); color: var(--orange); }
 .data-badge.match-matched { background: var(--green-soft); color: var(--green); }
 .deals-table td:nth-child(1) { width: 165px; }
-.deals-table td:nth-child(2) { min-width: 330px; }
-.deals-table td:nth-child(3) { width: 185px; }
-.deals-table td:nth-child(4) { width: 175px; }
-.deals-table td:nth-child(5) { width: 190px; }
+.deals-table td:nth-child(2) { min-width: 220px; }
+.deals-table td:nth-child(3) { min-width: 230px; }
+.deals-table td:nth-child(4) { width: 185px; }
+.deals-table td:nth-child(5) { width: 175px; }
+.deals-table td:nth-child(6) { width: 190px; }
 .deal-row { cursor: pointer; transition: background-color .15s ease; }
 .deal-row:hover,
 .deal-row:focus,
