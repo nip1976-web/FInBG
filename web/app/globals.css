@@ -524,13 +524,8 @@ td .progress + small { display: inline; }
   outline: none;
   background: var(--surface-soft);
 }
-.deal-row.selected td { border-bottom-color: transparent; }
-.deal-payments-row td {
-  padding: 0 18px 18px;
-  background: var(--surface-soft);
-  white-space: normal;
-}
-.deal-payments {
+.deal-payments-panel {
+  margin-top: 18px;
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 11px;
@@ -543,26 +538,30 @@ td .progress + small { display: inline; }
   justify-content: space-between;
   border-bottom: 1px solid var(--line);
 }
+.deal-payments-title div { min-width: 0; }
+.deal-payments-title strong,
+.deal-payments-title span { display: block; }
 .deal-payments-title span,
-.deal-payments p { color: var(--muted); font-size: 10px; }
-.deal-payments p { margin: 0; padding: 18px 14px; }
-.deal-payments article {
+.deal-payments-panel p { color: var(--muted); font-size: 10px; }
+.deal-payments-title > span { max-width: 42%; text-align: right; }
+.deal-payments-panel p { margin: 0; padding: 18px 14px; }
+.deal-payments-panel article {
   padding: 12px 14px;
   display: grid;
   grid-template-columns: 145px minmax(260px, 1fr) 180px;
   gap: 18px;
   border-bottom: 1px solid var(--line);
 }
-.deal-payments article:last-child { border-bottom: 0; }
-.deal-payments article strong,
-.deal-payments article small { display: block; }
-.deal-payments article small {
+.deal-payments-panel article:last-child { border-bottom: 0; }
+.deal-payments-panel article strong,
+.deal-payments-panel article small { display: block; }
+.deal-payments-panel article small {
   margin-top: 4px;
   color: var(--muted);
   font-size: 9px;
   line-height: 1.4;
 }
-.deal-payments article > div:last-child { text-align: right; }
+.deal-payments-panel article > div:last-child { text-align: right; }
 
 @media (max-width: 1050px) {
   .metrics { grid-template-columns: repeat(2,1fr); }
