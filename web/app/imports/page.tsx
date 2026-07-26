@@ -182,10 +182,9 @@ export default function ImportReviewPage() {
         </a>
         <nav aria-label="Основная навигация">
           <a className="nav-item" href="/"><span className="nav-dot" />Обзор</a>
-          <a className="nav-item" href="/"><span className="nav-dot" />Сделки</a>
-          <a className="nav-item" href="/"><span className="nav-dot" />Деньги</a>
+          <a className="nav-item" href="/data"><span className="nav-dot" />Загруженные данные</a>
           <a className="nav-item active" href="/imports">
-            <span className="nav-dot" />Импорт данных
+            <span className="nav-dot" />Черновик импорта
           </a>
         </nav>
         <div className="sidebar-footer">

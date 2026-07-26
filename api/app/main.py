@@ -147,6 +147,368 @@ def dashboard_summary(
     }
 
 
+@app.get("/api/data/summary")
+def loaded_data_summary() -> dict:
+    with database() as connection:
+        payments = connection.execute(
+            """
+            select
+                count(*) as row_count,
+                coalesce(sum(amount_rub), 0) as total_amount_rub,
+                count(*) filter (where is_internal_transfer) as internal_count,
+                coalesce(
+                    sum(amount_rub) filter (where is_internal_transfer),
+                    0
+                ) as internal_amount_rub,
+                min(payment_date) as date_from,
+                max(payment_date) as date_to
+            from payments
+            where source = 'payment_battery'
+              and direction = 'inflow'
+            """
+        ).fetchone()
+        receipts = connection.execute(
+            """
+            select
+                count(*) as row_count,
+                coalesce(sum(paid_amount_rub), 0) as total_amount_rub,
+                count(distinct customer_name) as customer_count,
+                min(payment_date) as date_from,
+                max(payment_date) as date_to
+            from customer_receipts
+            """
+        ).fetchone()
+        deals = connection.execute(
+            """
+            select
+                count(*) as row_count,
+                coalesce(sum(planned_revenue_rub), 0) as total_amount_rub,
+                coalesce(sum(paid_amount_rub), 0) as paid_amount_rub,
+                coalesce(
+                    sum(balance_rub) filter (where balance_rub > 0),
+                    0
+                ) as open_balance_rub,
+                count(*) filter (
+                    where financial_status = 'closed'
+                ) as closed_count,
+                count(*) filter (
+                    where financial_status = 'open'
+                ) as open_count,
+                count(*) filter (
+                    where financial_status = 'advance'
+                ) as advance_count,
+                count(*) filter (
+                    where match_status = 'matched'
+                ) as matched_count,
+                count(distinct customer_id) as customer_count
+            from deals
+            where source = 'buyers'
+            """
+        ).fetchone()
+
+    return {
+        "payments": {
+            **dict(payments),
+            "total_amount_rub": money(payments["total_amount_rub"]),
+            "internal_amount_rub": money(payments["internal_amount_rub"]),
+            "date_from": (
+                payments["date_from"].isoformat()
+                if payments["date_from"]
+                else None
+            ),
+            "date_to": (
+                payments["date_to"].isoformat()
+                if payments["date_to"]
+                else None
+            ),
+        },
+        "customer_receipts": {
+            **dict(receipts),
+            "total_amount_rub": money(receipts["total_amount_rub"]),
+            "date_from": (
+                receipts["date_from"].isoformat()
+                if receipts["date_from"]
+                else None
+            ),
+            "date_to": (
+                receipts["date_to"].isoformat()
+                if receipts["date_to"]
+                else None
+            ),
+        },
+        "deals": {
+            **dict(deals),
+            "total_amount_rub": money(deals["total_amount_rub"]),
+            "paid_amount_rub": money(deals["paid_amount_rub"]),
+            "open_balance_rub": money(deals["open_balance_rub"]),
+        },
+    }
+
+
+@app.get("/api/data/payments")
+def loaded_payments(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=10, le=100),
+    search: str | None = Query(default=None, max_length=200),
+) -> dict:
+    conditions = [
+        "p.source = 'payment_battery'",
+        "p.direction = 'inflow'",
+    ]
+    params: list[object] = []
+    if search and search.strip():
+        term = f"%{search.strip()}%"
+        conditions.append(
+            """
+            (
+                p.raw_counterparty ilike %s
+                or p.description ilike %s
+                or p.source_sheet ilike %s
+            )
+            """
+        )
+        params.extend([term, term, term])
+
+    where_sql = f"where {' and '.join(conditions)}"
+    offset = (page - 1) * page_size
+
+    with database() as connection:
+        total = connection.execute(
+            f"""
+            select count(*) as total
+            from payments p
+            {where_sql}
+            """,
+            params,
+        ).fetchone()["total"]
+        rows = connection.execute(
+            f"""
+            select
+                p.id,
+                p.payment_date,
+                p.raw_counterparty,
+                p.amount_rub,
+                p.description,
+                p.operation_type,
+                p.source_sheet,
+                p.source_row,
+                p.is_internal_transfer,
+                a.name as account_name
+            from payments p
+            join financial_accounts a on a.id = p.account_id
+            {where_sql}
+            order by p.payment_date desc, p.id desc
+            limit %s offset %s
+            """,
+            [*params, page_size, offset],
+        ).fetchall()
+
+    return {
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+        "items": [
+            {
+                **dict(row),
+                "payment_date": row["payment_date"].isoformat(),
+                "amount_rub": money(row["amount_rub"]),
+            }
+            for row in rows
+        ],
+    }
+
+
+@app.get("/api/data/customer-receipts")
+def loaded_customer_receipts(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=10, le=100),
+    search: str | None = Query(default=None, max_length=200),
+) -> dict:
+    conditions: list[str] = []
+    params: list[object] = []
+    if search and search.strip():
+        term = f"%{search.strip()}%"
+        conditions.append(
+            """
+            (
+                customer_name ilike %s
+                or document_number ilike %s
+                or notes ilike %s
+                or manager_name ilike %s
+            )
+            """
+        )
+        params.extend([term, term, term, term])
+
+    where_sql = f"where {' and '.join(conditions)}" if conditions else ""
+    offset = (page - 1) * page_size
+
+    with database() as connection:
+        total = connection.execute(
+            f"select count(*) as total from customer_receipts {where_sql}",
+            params,
+        ).fetchone()["total"]
+        rows = connection.execute(
+            f"""
+            select
+                id,
+                source_row,
+                customer_name,
+                document_type,
+                document_number,
+                document_date,
+                paid_amount_rub,
+                payment_date,
+                manager_name,
+                notes
+            from customer_receipts
+            {where_sql}
+            order by payment_date desc, id desc
+            limit %s offset %s
+            """,
+            [*params, page_size, offset],
+        ).fetchall()
+
+    return {
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+        "items": [
+            {
+                **dict(row),
+                "document_date": (
+                    row["document_date"].isoformat()
+                    if row["document_date"]
+                    else None
+                ),
+                "payment_date": row["payment_date"].isoformat(),
+                "paid_amount_rub": money(row["paid_amount_rub"]),
+            }
+            for row in rows
+        ],
+    }
+
+
+@app.get("/api/data/deals")
+def loaded_deals(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=10, le=100),
+    financial_status: Literal["open", "closed", "advance"] | None = None,
+    match_status: Literal["unmatched", "matched", "review"] | None = None,
+    search: str | None = Query(default=None, max_length=200),
+) -> dict:
+    conditions = ["d.source = 'buyers'"]
+    params: list[object] = []
+    if financial_status:
+        conditions.append("d.financial_status = %s")
+        params.append(financial_status)
+    if match_status:
+        conditions.append("d.match_status = %s")
+        params.append(match_status)
+    if search and search.strip():
+        term = f"%{search.strip()}%"
+        conditions.append(
+            """
+            (
+                c.name ilike %s
+                or d.original_document_number ilike %s
+                or d.title ilike %s
+                or e.full_name ilike %s
+            )
+            """
+        )
+        params.extend([term, term, term, term])
+
+    where_sql = f"where {' and '.join(conditions)}"
+    offset = (page - 1) * page_size
+
+    with database() as connection:
+        total = connection.execute(
+            f"""
+            select count(*) as total
+            from deals d
+            join counterparties c on c.id = d.customer_id
+            left join employees e on e.id = d.manager_id
+            {where_sql}
+            """,
+            params,
+        ).fetchone()["total"]
+        rows = connection.execute(
+            f"""
+            select
+                d.id,
+                d.deal_number,
+                d.title,
+                d.source_row,
+                d.original_document_type,
+                d.original_document_number,
+                d.opened_on,
+                d.payment_date,
+                d.planned_revenue_rub,
+                d.paid_amount_rub,
+                d.balance_rub,
+                d.financial_status,
+                d.match_status,
+                c.name as customer_name,
+                e.full_name as manager_name,
+                link.payment_id,
+                link.payment_date as linked_payment_date,
+                link.amount_rub as linked_payment_amount_rub
+            from deals d
+            join counterparties c on c.id = d.customer_id
+            left join employees e on e.id = d.manager_id
+            left join lateral (
+                select
+                    p.id as payment_id,
+                    p.payment_date,
+                    p.amount_rub
+                from payment_allocations pa
+                join payments p on p.id = pa.payment_id
+                where pa.deal_id = d.id
+                order by pa.id
+                limit 1
+            ) link on true
+            {where_sql}
+            order by d.payment_date desc, d.id desc
+            limit %s offset %s
+            """,
+            [*params, page_size, offset],
+        ).fetchall()
+
+    return {
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+        "items": [
+            {
+                **dict(row),
+                "opened_on": row["opened_on"].isoformat(),
+                "payment_date": (
+                    row["payment_date"].isoformat()
+                    if row["payment_date"]
+                    else None
+                ),
+                "planned_revenue_rub": money(
+                    row["planned_revenue_rub"]
+                ),
+                "paid_amount_rub": money(row["paid_amount_rub"]),
+                "balance_rub": money(row["balance_rub"]),
+                "linked_payment_date": (
+                    row["linked_payment_date"].isoformat()
+                    if row["linked_payment_date"]
+                    else None
+                ),
+                "linked_payment_amount_rub": (
+                    money(row["linked_payment_amount_rub"])
+                    if row["linked_payment_amount_rub"] is not None
+                    else None
+                ),
+            }
+            for row in rows
+        ],
+    }
+
+
 @app.get("/api/imports/staging-summary")
 def staging_import_summary() -> dict:
     with database() as connection:
