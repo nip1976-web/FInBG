@@ -527,13 +527,16 @@ td .progress + small { display: inline; }
 .data-badge.match-unmatched,
 .data-badge.match-review { background: var(--orange-soft); color: var(--orange); }
 .data-badge.match-matched { background: var(--green-soft); color: var(--green); }
-.deals-table td:nth-child(1) { min-width: 250px; }
-.deals-table td:nth-child(2) { width: 120px; }
-.deals-table td:nth-child(3) { width: 140px; }
-.deals-table td:nth-child(4) { width: 120px; }
+.deals-table { min-width: 850px; width: 100%; table-layout: fixed; }
+.deals-table th,
+.deals-table td { padding-left: 10px; padding-right: 10px; }
+.deals-table td:nth-child(1) { width: 24%; min-width: 0; }
+.deals-table td:nth-child(2) { width: 11%; min-width: 0; }
+.deals-table td:nth-child(3) { width: 13%; min-width: 0; }
+.deals-table td:nth-child(4) { width: 11%; min-width: 0; }
 .deals-table td:nth-child(5),
 .deals-table td:nth-child(6),
-.deals-table td:nth-child(7) { width: 160px; white-space: nowrap; }
+.deals-table td:nth-child(7) { width: 13.5%; min-width: 0; white-space: nowrap; }
 .deal-row { cursor: pointer; transition: background-color .15s ease; }
 .deal-row:hover,
 .deal-row:focus,
