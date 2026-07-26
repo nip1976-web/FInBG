@@ -418,11 +418,21 @@ td .progress + small { display: inline; }
 .loaded-workspace { padding-bottom: 80px; }
 .loaded-workspace.deal-selected {
   height: 100vh;
-  padding-bottom: 30px;
+  padding-top: 14px;
+  padding-bottom: 18px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
 }
+.deal-selected .loaded-topbar .eyebrow,
+.deal-selected .review-intro { display: none; }
+.deal-selected .loaded-topbar { min-height: 42px; }
+.deal-selected .loaded-topbar h1 { font-size: 25px; }
+.deal-selected .dataset-tabs { padding-top: 4px; }
+.deal-selected .dataset-tabs button { padding-top: 8px; padding-bottom: 8px; }
+.deal-selected .loaded-toolbar { padding-top: 8px; padding-bottom: 8px; }
+.deal-selected .loaded-toolbar input,
+.deal-selected .loaded-toolbar select { height: 34px; }
 .loaded-topbar { align-items: center; }
 .loaded-summary {
   display: grid;
