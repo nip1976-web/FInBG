@@ -92,13 +92,10 @@ export default function LoadedDataPage() {
   const [selectedDealId, setSelectedDealId] = useState<number | null>(null);
   const [dealPayments, setDealPayments] = useState<Record<number, DealPayment[]>>({});
   const [dealPaymentsLoading, setDealPaymentsLoading] = useState<number | null>(null);
-  const [manualLinkOpen, setManualLinkOpen] = useState(false);
-  const [availablePayments, setAvailablePayments] = useState<AvailablePayment[]>([]);
-  const [availablePaymentsLoading, setAvailablePaymentsLoading] = useState(false);
-  const [paymentSearch, setPaymentSearch] = useState("");
-  const [manualPaymentId, setManualPaymentId] = useState("");
-  const [manualAmount, setManualAmount] = useState("");
-  const [manualSaving, setManualSaving] = useState(false);
+  const [candidatePayments, setCandidatePayments] = useState<AvailablePayment[]>([]);
+  const [candidatePaymentsLoading, setCandidatePaymentsLoading] = useState(false);
+  const [allocationAmounts, setAllocationAmounts] = useState<Record<number, string>>({});
+  const [manualSavingPaymentId, setManualSavingPaymentId] = useState<number | null>(null);
   const [manualError, setManualError] = useState("");
   const [dealFilter, setDealFilter] = useState<DealFilter>("all");
   const [search, setSearch] = useState("");
@@ -161,47 +158,39 @@ export default function LoadedDataPage() {
     setSearch("");
     setDealFilter("all");
     setSelectedDealId(null);
-    setManualLinkOpen(false);
   };
 
-  const loadAvailablePayments = async (searchTerm = paymentSearch) => {
-    setAvailablePaymentsLoading(true);
+  const loadCandidatePayments = async (dealId: number) => {
+    setCandidatePaymentsLoading(true);
     setManualError("");
     try {
-      const params = new URLSearchParams({ page_size: "500" });
-      if (searchTerm.trim()) params.set("search", searchTerm.trim());
-      const response = await fetch(`${API_URL}/api/data/payments/available?${params}`);
-      if (!response.ok) throw new Error("Не удалось получить список платежей.");
+      const response = await fetch(`${API_URL}/api/data/deals/${dealId}/candidate-payments`);
+      if (!response.ok) throw new Error("Не удалось получить операции покупателя.");
       const payload = await response.json();
-      setAvailablePayments(payload.items);
+      setCandidatePayments(payload.items);
+      setAllocationAmounts(Object.fromEntries(payload.items.map((item: AvailablePayment) => [item.id, item.available_amount_rub])));
     } catch (requestError) {
       setManualError((requestError as Error).message);
     } finally {
-      setAvailablePaymentsLoading(false);
+      setCandidatePaymentsLoading(false);
     }
   };
 
-  const openManualLink = async () => {
-    setManualLinkOpen(true);
-    setManualPaymentId("");
-    setManualAmount("");
-    await loadAvailablePayments();
-  };
-
-  const saveManualLink = async () => {
-    if (!selectedDealId || !manualPaymentId || !manualAmount) {
-      setManualError("Выберите платёж и укажите сумму.");
+  const saveManualLink = async (paymentId: number) => {
+    const amount = allocationAmounts[paymentId];
+    if (!selectedDealId || !amount) {
+      setManualError("Укажите сумму для распределения.");
       return;
     }
-    setManualSaving(true);
+    setManualSavingPaymentId(paymentId);
     setManualError("");
     try {
       const response = await fetch(`${API_URL}/api/data/deals/${selectedDealId}/payments`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          payment_id: Number(manualPaymentId),
-          allocated_amount_rub: manualAmount.replace(",", "."),
+          payment_id: paymentId,
+          allocated_amount_rub: amount.replace(",", "."),
         }),
       });
       const payload = await response.json();
@@ -210,14 +199,12 @@ export default function LoadedDataPage() {
       if (!dealResponse.ok) throw new Error("Связь сохранена, но список платежей не обновился.");
       const dealPayload = await dealResponse.json();
       setDealPayments((current) => ({ ...current, [selectedDealId]: dealPayload.items }));
-      setManualLinkOpen(false);
-      setManualPaymentId("");
-      setManualAmount("");
+      loadCandidatePayments(selectedDealId);
       load();
     } catch (requestError) {
       setManualError((requestError as Error).message);
     } finally {
-      setManualSaving(false);
+      setManualSavingPaymentId(null);
     }
   };
 
@@ -227,7 +214,7 @@ export default function LoadedDataPage() {
       return;
     }
     setSelectedDealId(dealId);
-    setManualLinkOpen(false);
+    loadCandidatePayments(dealId);
     if (dealPayments[dealId]) return;
 
     setDealPaymentsLoading(dealId);
@@ -465,61 +452,51 @@ export default function LoadedDataPage() {
                 {selectedDeal && <span>{selectedDeal.title}</span>}
               </div>
               {!selectedDeal && <p>Выберите сделку в таблице выше, чтобы увидеть связанные с ней платежи.</p>}
-              {selectedDeal && !manualLinkOpen && (
-                <div className="manual-link-action">
-                  <span>Можно распределить один платёж между несколькими сделками.</span>
-                  <button type="button" onClick={openManualLink}>Привязать платёж</button>
-                </div>
-              )}
-              {selectedDeal && manualLinkOpen && (
-                <div className="manual-link-form">
-                  <label>
-                    <span>Найти платёж</span>
-                    <div className="manual-search-row">
-                      <input
-                        value={paymentSearch}
-                        placeholder="Контрагент или текст платежа"
-                        onChange={(event) => setPaymentSearch(event.target.value)}
-                        onKeyDown={(event) => {
-                          if (event.key === "Enter") {
-                            event.preventDefault();
-                            loadAvailablePayments(event.currentTarget.value);
-                          }
-                        }}
-                      />
-                      <button type="button" onClick={() => loadAvailablePayments()}>Найти</button>
-                    </div>
-                  </label>
-                  <label>
-                    <span>Входящий платёж</span>
-                    <select value={manualPaymentId} onChange={(event) => {
-                      const id = event.target.value;
-                      setManualPaymentId(id);
-                      const payment = availablePayments.find((item) => item.id === Number(id));
-                      if (payment) setManualAmount(payment.available_amount_rub);
-                    }}>
-                      <option value="">Выберите платёж</option>
-                      {availablePayments.map((payment) => (
-                        <option key={payment.id} value={payment.id}>
-                          {date(payment.payment_date)} · {payment.raw_counterparty || "Без контрагента"} · доступно {rub(payment.available_amount_rub)}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label>
-                    <span>Сумма в сделку, ₽</span>
-                    <input inputMode="decimal" value={manualAmount} placeholder="0,00" onChange={(event) => setManualAmount(event.target.value)} />
-                  </label>
-                  {manualError && <div className="manual-link-error">{manualError}</div>}
-                  <div className="manual-link-buttons">
-                    <button type="button" onClick={() => setManualLinkOpen(false)}>Отмена</button>
-                    <button type="button" className="manual-save" disabled={manualSaving || availablePaymentsLoading} onClick={saveManualLink}>
-                      {manualSaving ? "Сохранение…" : "Сохранить связь"}
-                    </button>
+              {selectedDeal && (
+                <div className="candidate-payments">
+                  <div className="candidate-payments-title">
+                    <strong>Операции покупателя без связи со сделкой</strong>
+                    <span>Можно распределить остаток одной операции между несколькими сделками.</span>
                   </div>
-                  {availablePaymentsLoading && <small>Загрузка доступных платежей…</small>}
+                  {candidatePaymentsLoading && <p>Загрузка операций покупателя…</p>}
+                  {!candidatePaymentsLoading && candidatePayments.length === 0 && (
+                    <p>Нераспределённых операций этого покупателя не найдено.</p>
+                  )}
+                  {candidatePayments.map((payment) => (
+                    <article key={payment.id}>
+                      <div>
+                        <strong>{date(payment.payment_date)}</strong>
+                        <small>{payment.account_name} · {payment.source_sheet}, строка {payment.source_row}</small>
+                      </div>
+                      <div>
+                        <strong>{payment.raw_counterparty || "Контрагент не указан"}</strong>
+                        <small>{payment.description || "Без пояснения"}</small>
+                      </div>
+                      <div>
+                        <strong className="amount-inflow">Доступно {rub(payment.available_amount_rub)}</strong>
+                        <small>Сумма операции: {rub(payment.amount_rub)}</small>
+                      </div>
+                      <label className="candidate-amount">
+                        <span>В сделку, ₽</span>
+                        <input
+                          inputMode="decimal"
+                          value={allocationAmounts[payment.id] ?? ""}
+                          onChange={(event) => setAllocationAmounts((current) => ({ ...current, [payment.id]: event.target.value }))}
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        className="manual-save"
+                        disabled={manualSavingPaymentId === payment.id}
+                        onClick={() => saveManualLink(payment.id)}
+                      >
+                        {manualSavingPaymentId === payment.id ? "Сохранение…" : "Привязать"}
+                      </button>
+                    </article>
+                  ))}
                 </div>
               )}
+              {manualError && <div className="manual-link-error">{manualError}</div>}
               {selectedDeal && dealPaymentsLoading === selectedDeal.id && <p>Загрузка платежей…</p>}
               {selectedDeal && dealPaymentsLoading !== selectedDeal.id && (dealPayments[selectedDeal.id]?.length ?? 0) === 0 && (
                 <p>Связанных платежей пока нет.</p>

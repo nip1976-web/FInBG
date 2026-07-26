@@ -624,6 +624,87 @@ def available_payments_for_allocation(
     }
 
 
+@app.get("/api/data/deals/{deal_id}/candidate-payments")
+def deal_candidate_payments(deal_id: int) -> dict:
+    with database() as connection:
+        deal = connection.execute(
+            """
+            select d.id, c.name as customer_name, d.original_document_number
+            from deals d
+            join counterparties c on c.id = d.customer_id
+            where d.id = %s and d.source = 'buyers'
+            """,
+            [deal_id],
+        ).fetchone()
+        if deal is None:
+            return {"items": []}
+
+        rows = connection.execute(
+            """
+            select
+                p.id,
+                p.payment_date,
+                p.amount_rub,
+                p.raw_counterparty,
+                p.description,
+                p.source_sheet,
+                p.source_row,
+                a.name as account_name,
+                coalesce(sum(pa.allocated_amount_rub), 0) as allocated_amount_rub,
+                p.amount_rub - coalesce(sum(pa.allocated_amount_rub), 0) as available_amount_rub
+            from payments p
+            join financial_accounts a on a.id = p.account_id
+            left join payment_allocations pa on pa.payment_id = p.id
+            where p.source = 'payment_battery'
+              and p.direction = 'inflow'
+              and not exists (
+                select 1 from payment_allocations current_link
+                where current_link.payment_id = p.id and current_link.deal_id = %(deal_id)s
+              )
+              and (
+                (
+                  coalesce(p.raw_counterparty, '') <> ''
+                  and (
+                    position(
+                      regexp_replace(lower(%(customer_name)s), '[^[:alnum:]]', '', 'g')
+                      in regexp_replace(lower(p.raw_counterparty), '[^[:alnum:]]', '', 'g')
+                    ) > 0
+                    or position(
+                      regexp_replace(lower(p.raw_counterparty), '[^[:alnum:]]', '', 'g')
+                      in regexp_replace(lower(%(customer_name)s), '[^[:alnum:]]', '', 'g')
+                    ) > 0
+                  )
+                )
+                or (
+                  coalesce(%(document_number)s, '') <> ''
+                  and lower(coalesce(p.description, '')) like '%%' || lower(%(document_number)s) || '%%'
+                )
+              )
+            group by p.id, a.name
+            having p.amount_rub - coalesce(sum(pa.allocated_amount_rub), 0) > 0
+            order by p.payment_date desc, p.id desc
+            """,
+            {
+                "deal_id": deal_id,
+                "customer_name": deal["customer_name"],
+                "document_number": deal["original_document_number"],
+            },
+        ).fetchall()
+
+    return {
+        "items": [
+            {
+                **dict(row),
+                "payment_date": row["payment_date"].isoformat(),
+                "amount_rub": money(row["amount_rub"]),
+                "allocated_amount_rub": money(row["allocated_amount_rub"]),
+                "available_amount_rub": money(row["available_amount_rub"]),
+            }
+            for row in rows
+        ]
+    }
+
+
 @app.post("/api/data/deals/{deal_id}/payments")
 def create_manual_payment_allocation(
     deal_id: int, payload: ManualPaymentAllocationCreate

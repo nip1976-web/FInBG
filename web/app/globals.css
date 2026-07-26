@@ -618,6 +618,53 @@ td .progress + small { display: inline; }
 .manual-link-buttons .manual-save { border-color: var(--green); background: var(--green); color: white; }
 .manual-link-buttons button:disabled { opacity: .55; cursor: default; }
 .manual-link-error { grid-column: 1 / -1; color: var(--red); font-size: 10px; }
+.candidate-payments { border-bottom: 1px solid var(--line); }
+.candidate-payments-title {
+  padding: 10px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  background: var(--surface-soft);
+}
+.candidate-payments-title strong,
+.candidate-payments-title span { display: block; }
+.candidate-payments-title span { color: var(--muted); font-size: 10px; text-align: right; }
+.candidate-payments > p { margin: 0; padding: 14px; }
+.candidate-payments article {
+  padding: 10px 14px;
+  display: grid;
+  grid-template-columns: 120px minmax(220px, 1fr) 165px 120px auto;
+  align-items: end;
+  gap: 12px;
+  border-top: 1px solid var(--line);
+}
+.candidate-payments article strong,
+.candidate-payments article small { display: block; }
+.candidate-payments article small,
+.candidate-amount span { margin-top: 4px; color: var(--muted); font-size: 9px; line-height: 1.4; }
+.candidate-amount span { display: block; margin: 0 0 4px; }
+.candidate-amount input {
+  width: 100%;
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--foreground);
+  font: inherit;
+  font-size: 10px;
+}
+.candidate-payments .manual-save {
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--green);
+  border-radius: 7px;
+  background: var(--green);
+  color: white;
+  font-size: 10px;
+  font-weight: 650;
+}
 .deal-payments-panel article {
   padding: 12px 14px;
   display: grid;
@@ -643,6 +690,7 @@ td .progress + small { display: inline; }
   .loaded-summary { grid-template-columns: 1fr; }
   .manual-link-form { grid-template-columns: 1fr 1fr; }
   .manual-link-buttons { grid-column: 1 / -1; }
+  .candidate-payments article { grid-template-columns: 120px minmax(190px, 1fr) 145px 115px auto; }
 }
 @media (max-width: 720px) {
   .app-shell { grid-template-columns: 1fr; }
@@ -658,6 +706,9 @@ td .progress + small { display: inline; }
   .deal-selected .deal-payments-panel { margin-top: 18px; border: 1px solid var(--line); border-radius: 11px; }
   .manual-link-action { align-items: flex-start; flex-direction: column; }
   .manual-link-form { grid-template-columns: 1fr; }
+  .candidate-payments-title { align-items: flex-start; flex-direction: column; }
+  .candidate-payments-title span { text-align: left; }
+  .candidate-payments article { grid-template-columns: 1fr; }
   .topbar { align-items: flex-start; flex-direction: column; }
   .topbar-actions { width: 100%; flex-wrap: wrap; }
   .primary-button { flex: 1; }
