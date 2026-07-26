@@ -1,6 +1,26 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+
+type DashboardSummary = {
+  cash_balance_rub: string;
+  inflow_rub: string;
+  outflow_rub: string;
+  net_cash_flow_rub: string;
+  revenue_rub: string;
+  receivables_rub: string;
+  payables_rub: string;
+};
+
+const API_URL =
+  process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+
+const formatRub = (value: string | undefined) =>
+  new Intl.NumberFormat("ru-RU", {
+    style: "currency",
+    currency: "RUB",
+    maximumFractionDigits: 0,
+  }).format(Number(value ?? 0));
 
 const periods = {
   month: {
@@ -55,7 +75,30 @@ const cashBars = [
 export default function Home() {
   const [period, setPeriod] = useState<keyof typeof periods>("month");
   const [active, setActive] = useState("Обзор");
+  const [summary, setSummary] = useState<DashboardSummary | null>(null);
+  const [apiConnected, setApiConnected] = useState(false);
   const data = useMemo(() => periods[period], [period]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+
+    fetch(`${API_URL}/api/dashboard/summary`, {
+      signal: controller.signal,
+    })
+      .then((response) => {
+        if (!response.ok) throw new Error("API request failed");
+        return response.json() as Promise<DashboardSummary>;
+      })
+      .then((payload) => {
+        setSummary(payload);
+        setApiConnected(true);
+      })
+      .catch((error: Error) => {
+        if (error.name !== "AbortError") setApiConnected(false);
+      });
+
+    return () => controller.abort();
+  }, []);
 
   return (
     <main className="app-shell">
@@ -98,7 +141,9 @@ export default function Home() {
             <h1>{active}</h1>
           </div>
           <div className="topbar-actions">
-            <span className="demo-badge">Демо-данные</span>
+            <span className={apiConnected ? "connection-badge connected" : "connection-badge"}>
+              {apiConnected ? "База VPS подключена" : "Подключение к VPS…"}
+            </span>
             <select
               aria-label="Период отчёта"
               value={period}
@@ -127,7 +172,7 @@ export default function Home() {
               <span>Деньги сейчас</span>
               <span className="trend positive">+6,8%</span>
             </div>
-            <strong>{data.cash}</strong>
+            <strong>{formatRub(summary?.cash_balance_rub)}</strong>
             <p>Хольц, ИП и наличные</p>
           </article>
           <article className="metric-card">
@@ -135,23 +180,23 @@ export default function Home() {
               <span>Выручка</span>
               <span className="trend positive">+12,4%</span>
             </div>
-            <strong>{data.revenue}</strong>
-            <p>с НДС за период</p>
+            <strong>{formatRub(summary?.revenue_rub)}</strong>
+            <p>по данным PostgreSQL</p>
           </article>
           <article className="metric-card">
             <div className="metric-heading">
               <span>Прибыль</span>
               <span className="trend positive">+9,1%</span>
             </div>
-            <strong>{data.profit}</strong>
-            <p>рентабельность {data.margin}</p>
+            <strong>—</strong>
+            <p>рассчитаем после импорта сделок</p>
           </article>
           <article className="metric-card">
             <div className="metric-heading">
               <span>К получению</span>
               <span className="trend warning">3 просрочено</span>
             </div>
-            <strong>2 846 000 ₽</strong>
+            <strong>{formatRub(summary?.receivables_rub)}</strong>
             <p>дебиторская задолженность</p>
           </article>
         </section>
@@ -170,9 +215,9 @@ export default function Home() {
             </div>
 
             <div className="cash-summary">
-              <div><span>Поступило</span><strong>{data.inflow}</strong></div>
-              <div><span>Потрачено</span><strong>{data.outflow}</strong></div>
-              <div><span>Чистый поток</span><strong className="positive-text">+1,18 млн</strong></div>
+              <div><span>Поступило</span><strong>{formatRub(summary?.inflow_rub)}</strong></div>
+              <div><span>Потрачено</span><strong>{formatRub(summary?.outflow_rub)}</strong></div>
+              <div><span>Чистый поток</span><strong className="positive-text">{formatRub(summary?.net_cash_flow_rub)}</strong></div>
             </div>
 
             <div className="bar-chart" aria-label="Движение денег по месяцам">

@@ -1,0 +1,23 @@
+[Unit]
+Description=FinBG FastAPI service
+After=network.target postgresql.service
+Requires=postgresql.service
+
+[Service]
+Type=simple
+User=finbg
+Group=finbg
+WorkingDirectory=/opt/finbg/api
+Environment=DATABASE_URL=dbname=finbg
+Environment=ALLOWED_ORIGINS=http://localhost:5173,http://localhost:5174
+ExecStart=/opt/finbg/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/finbg
+
+[Install]
+WantedBy=multi-user.target
