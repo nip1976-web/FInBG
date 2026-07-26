@@ -192,7 +192,7 @@ export default function LoadedDataPage() {
         </div>
       </aside>
 
-      <section className="workspace loaded-workspace">
+      <section className={`workspace loaded-workspace${selectedDealId ? " deal-selected" : ""}`}>
         <header className="topbar loaded-topbar">
           <div>
             <p className="eyebrow">Рабочая база · PostgreSQL на VPS</p>

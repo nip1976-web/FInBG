@@ -416,6 +416,13 @@ td .progress + small { display: inline; }
 .review-pagination button:disabled { cursor: default; opacity: .4; }
 
 .loaded-workspace { padding-bottom: 80px; }
+.loaded-workspace.deal-selected {
+  height: 100vh;
+  padding-bottom: 30px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
 .loaded-topbar { align-items: center; }
 .loaded-summary {
   display: grid;
@@ -442,6 +449,12 @@ td .progress + small { display: inline; }
   border: 1px solid var(--line);
   border-radius: 15px;
   background: var(--surface);
+}
+.deal-selected .loaded-panel {
+  min-height: 0;
+  flex: 1;
+  display: grid;
+  grid-template-rows: auto auto minmax(190px, 1fr) auto minmax(155px, .75fr);
 }
 .dataset-tabs {
   padding: 10px 12px 0;
@@ -488,6 +501,8 @@ td .progress + small { display: inline; }
 }
 .loaded-toolbar > span { color: var(--muted); font-size: 11px; }
 .loaded-table-wrap { overflow-x: auto; }
+.deal-selected .loaded-table-wrap { min-height: 0; overflow: auto; }
+.deal-selected .loaded-table thead { position: sticky; top: 0; z-index: 1; }
 .loaded-table { min-width: 980px; }
 .loaded-table td { vertical-align: top; white-space: normal; }
 .loaded-table td:nth-child(1) { width: 125px; }
@@ -530,6 +545,13 @@ td .progress + small { display: inline; }
   border: 1px solid var(--line);
   border-radius: 11px;
   background: var(--surface);
+}
+.deal-selected .deal-payments-panel {
+  min-height: 0;
+  margin: 0;
+  border-width: 1px 0 0;
+  border-radius: 0;
+  overflow-y: auto;
 }
 .deal-payments-title {
   padding: 11px 14px;
@@ -577,6 +599,10 @@ td .progress + small { display: inline; }
   .nav-item { flex: 0 0 auto; }
   .sidebar-footer { display: none; }
   .workspace { padding: 22px 14px 40px; }
+  .loaded-workspace.deal-selected { height: auto; min-height: 100vh; overflow: visible; }
+  .deal-selected .loaded-panel { display: block; }
+  .deal-selected .loaded-table-wrap { overflow-x: auto; }
+  .deal-selected .deal-payments-panel { margin-top: 18px; border: 1px solid var(--line); border-radius: 11px; }
   .topbar { align-items: flex-start; flex-direction: column; }
   .topbar-actions { width: 100%; flex-wrap: wrap; }
   .primary-button { flex: 1; }
