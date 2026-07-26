@@ -1,41 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 
 const API_URL =
   process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 type Dataset = "payments" | "deals";
 type DealFilter = "all" | "open" | "closed" | "unmatched";
-
-type Summary = {
-  payments: {
-    row_count: number;
-    total_amount_rub: string;
-    internal_count: number;
-    internal_amount_rub: string;
-    date_from: string | null;
-    date_to: string | null;
-  };
-  customer_receipts: {
-    row_count: number;
-    total_amount_rub: string;
-    customer_count: number;
-    date_from: string | null;
-    date_to: string | null;
-  };
-  deals: {
-    row_count: number;
-    total_amount_rub: string;
-    paid_amount_rub: string;
-    open_balance_rub: string;
-    closed_count: number;
-    open_count: number;
-    advance_count: number;
-    matched_count: number;
-    customer_count: number;
-  };
-};
 
 type Payment = {
   id: number;
@@ -78,18 +49,23 @@ type PageResponse<T> = {
   items: T[];
 };
 
+type DealPayment = {
+  id: number;
+  payment_date: string;
+  amount_rub: string;
+  raw_counterparty: string | null;
+  description: string | null;
+  source_sheet: string | null;
+  source_row: number | null;
+  account_name: string;
+  allocated_amount_rub: string;
+  match_confidence: "automatic" | "manual" | null;
+};
+
 const rub = (value: string) =>
   new Intl.NumberFormat("ru-RU", {
     style: "currency",
     currency: "RUB",
-    maximumFractionDigits: 2,
-  }).format(Number(value));
-
-const shortRub = (value: string) =>
-  new Intl.NumberFormat("ru-RU", {
-    style: "currency",
-    currency: "RUB",
-    notation: "compact",
     maximumFractionDigits: 2,
   }).format(Number(value));
 
@@ -100,9 +76,11 @@ const date = (value: string | null) =>
 
 export default function LoadedDataPage() {
   const [dataset, setDataset] = useState<Dataset>("payments");
-  const [summary, setSummary] = useState<Summary | null>(null);
   const [payments, setPayments] = useState<PageResponse<Payment> | null>(null);
   const [deals, setDeals] = useState<PageResponse<Deal> | null>(null);
+  const [selectedDealId, setSelectedDealId] = useState<number | null>(null);
+  const [dealPayments, setDealPayments] = useState<Record<number, DealPayment[]>>({});
+  const [dealPaymentsLoading, setDealPaymentsLoading] = useState<number | null>(null);
   const [dealFilter, setDealFilter] = useState<DealFilter>("all");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
@@ -132,14 +110,12 @@ export default function LoadedDataPage() {
       if (dataset === "deals" && dealFilter === "unmatched") {
         params.set("without_match", "true");
       }
-      const [summaryResponse, rowsResponse] = await Promise.all([
-        fetch(`${API_URL}/api/data/summary`),
-        fetch(`${API_URL}${endpoint}?${params.toString()}`),
-      ]);
-      if (!summaryResponse.ok || !rowsResponse.ok) {
+      const rowsResponse = await fetch(
+        `${API_URL}${endpoint}?${params.toString()}`
+      );
+      if (!rowsResponse.ok) {
         throw new Error("Не удалось получить загруженные данные");
       }
-      setSummary(await summaryResponse.json());
       const payload = await rowsResponse.json();
       if (dataset === "payments") setPayments(payload);
       else setDeals(payload);
@@ -164,6 +140,34 @@ export default function LoadedDataPage() {
     setPage(1);
     setSearch("");
     setDealFilter("all");
+    setSelectedDealId(null);
+  };
+
+  const selectDeal = async (dealId: number) => {
+    if (selectedDealId === dealId) {
+      setSelectedDealId(null);
+      return;
+    }
+    setSelectedDealId(dealId);
+    if (dealPayments[dealId]) return;
+
+    setDealPaymentsLoading(dealId);
+    setError("");
+    try {
+      const response = await fetch(
+        `${API_URL}/api/data/deals/${dealId}/payments`
+      );
+      if (!response.ok) throw new Error("Не удалось получить платежи сделки");
+      const payload = await response.json();
+      setDealPayments((current) => ({
+        ...current,
+        [dealId]: payload.items,
+      }));
+    } catch (requestError) {
+      setError((requestError as Error).message);
+    } finally {
+      setDealPaymentsLoading(null);
+    }
   };
 
   return (
@@ -200,33 +204,6 @@ export default function LoadedDataPage() {
           Входящие платежи сопоставляются со сделками Buyers. Неоднозначные
           строки остаются без связи для ручной проверки.
         </p>
-
-        <section className="loaded-summary">
-          <article>
-            <span>Входящие Payments</span>
-            <strong>{summary?.payments.row_count ?? 0}</strong>
-            <b>{shortRub(summary?.payments.total_amount_rub ?? "0")}</b>
-            <small>{date(summary?.payments.date_from)} — {date(summary?.payments.date_to)}</small>
-          </article>
-          <article>
-            <span>Сделки Buyers</span>
-            <strong>{summary?.deals.row_count ?? 0}</strong>
-            <b>{shortRub(summary?.deals.total_amount_rub ?? "0")}</b>
-            <small>{summary?.deals.customer_count ?? 0} покупателей</small>
-          </article>
-          <article>
-            <span>Закрытые сделки</span>
-            <strong>{summary?.deals.closed_count ?? 0}</strong>
-            <b>{summary?.deals.matched_count ?? 0} связаны</b>
-            <small>с входящими платежами</small>
-          </article>
-          <article>
-            <span>Открытый остаток</span>
-            <strong>{summary?.deals.open_count ?? 0}</strong>
-            <b>{shortRub(summary?.deals.open_balance_rub ?? "0")}</b>
-            <small>сделок требуют оплаты</small>
-          </article>
-        </section>
 
         <section className="loaded-panel">
           <div className="dataset-tabs" role="tablist" aria-label="Источники данных">
@@ -336,45 +313,91 @@ export default function LoadedDataPage() {
                 <tbody>
                   {loading && <tr><td colSpan={5} className="review-empty">Загрузка…</td></tr>}
                   {!loading && deals?.items.map((item) => (
-                    <tr key={item.id}>
-                      <td>
-                        <strong>{item.deal_number}</strong>
-                        <small>от {date(item.opened_on)} · строка {item.source_row}</small>
-                      </td>
-                      <td className="loaded-description">
-                        <strong>{item.customer_name}</strong>
-                        <small>
-                          {item.original_document_type || "Документ"}{" "}
-                          {item.original_document_number || "—"} · {item.title}
-                        </small>
-                      </td>
-                      <td>
-                        <strong>{rub(item.planned_revenue_rub)}</strong>
-                        <small>Оплачено: {rub(item.paid_amount_rub)}</small>
-                      </td>
-                      <td>
-                        <strong className={item.financial_status === "open" ? "negative-text" : "amount-inflow"}>
-                          {rub(item.balance_rub)}
-                        </strong>
-                        <small>
-                          {item.financial_status === "closed"
-                            ? "Сделка закрыта"
-                            : item.financial_status === "advance"
-                              ? "Получен аванс"
-                              : "Ожидается оплата"}
-                        </small>
-                      </td>
-                      <td>
-                        <span className={`data-badge match-${item.match_status}`}>
-                          {item.match_status === "matched" ? "Платёж найден" : "Нужна проверка"}
-                        </span>
-                        <small>
-                          {item.payment_id
-                            ? `${date(item.linked_payment_date)} · ${rub(item.linked_payment_amount_rub || "0")}`
-                            : item.manager_name || "Менеджер не указан"}
-                        </small>
-                      </td>
-                    </tr>
+                    <Fragment key={item.id}>
+                      <tr
+                        className={selectedDealId === item.id ? "deal-row selected" : "deal-row"}
+                        tabIndex={0}
+                        aria-expanded={selectedDealId === item.id}
+                        onClick={() => selectDeal(item.id)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            selectDeal(item.id);
+                          }
+                        }}
+                      >
+                        <td>
+                          <strong>{item.deal_number}</strong>
+                          <small>от {date(item.opened_on)} · строка {item.source_row}</small>
+                        </td>
+                        <td className="loaded-description">
+                          <strong>{item.customer_name}</strong>
+                          <small>
+                            {item.original_document_type || "Документ"}{" "}
+                            {item.original_document_number || "—"} · {item.title}
+                          </small>
+                        </td>
+                        <td>
+                          <strong>{rub(item.planned_revenue_rub)}</strong>
+                          <small>Оплачено: {rub(item.paid_amount_rub)}</small>
+                        </td>
+                        <td>
+                          <strong className={item.financial_status === "open" ? "negative-text" : "amount-inflow"}>
+                            {rub(item.balance_rub)}
+                          </strong>
+                          <small>
+                            {item.financial_status === "closed"
+                              ? "Сделка закрыта"
+                              : item.financial_status === "advance"
+                                ? "Получен аванс"
+                                : "Ожидается оплата"}
+                          </small>
+                        </td>
+                        <td>
+                          <span className={`data-badge match-${item.match_status}`}>
+                            {item.match_status === "matched" ? "Платёж найден" : "Нужна проверка"}
+                          </span>
+                          <small>
+                            {selectedDealId === item.id ? "Скрыть платежи ↑" : "Показать платежи ↓"}
+                          </small>
+                        </td>
+                      </tr>
+                      {selectedDealId === item.id && (
+                        <tr className="deal-payments-row">
+                          <td colSpan={5}>
+                            <div className="deal-payments">
+                              <div className="deal-payments-title">
+                                <strong>Платежи по сделке</strong>
+                                <span>Менеджер: {item.manager_name || "не указан"}</span>
+                              </div>
+                              {dealPaymentsLoading === item.id && (
+                                <p>Загрузка платежей…</p>
+                              )}
+                              {dealPaymentsLoading !== item.id &&
+                                (dealPayments[item.id]?.length ?? 0) === 0 && (
+                                  <p>Связанных платежей пока нет</p>
+                                )}
+                              {dealPayments[item.id]?.map((payment) => (
+                                <article key={payment.id}>
+                                  <div>
+                                    <strong>{date(payment.payment_date)}</strong>
+                                    <small>{payment.account_name} · {payment.source_sheet}, строка {payment.source_row}</small>
+                                  </div>
+                                  <div>
+                                    <strong>{payment.raw_counterparty || "Контрагент не указан"}</strong>
+                                    <small>{payment.description || "Без пояснения"}</small>
+                                  </div>
+                                  <div className="amount-inflow">
+                                    <strong>+{rub(payment.amount_rub)}</strong>
+                                    <small>В сделку: {rub(payment.allocated_amount_rub)}</small>
+                                  </div>
+                                </article>
+                              ))}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
                   ))}
                 </tbody>
               </table>

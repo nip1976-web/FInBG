@@ -512,6 +512,58 @@ def loaded_deals(
     }
 
 
+@app.get("/api/data/deals/{deal_id}/payments")
+def loaded_deal_payments(deal_id: int) -> dict:
+    with database() as connection:
+        deal = connection.execute(
+            """
+            select id, deal_number, title
+            from deals
+            where id = %(deal_id)s and source = 'buyers'
+            """,
+            {"deal_id": deal_id},
+        ).fetchone()
+        if deal is None:
+            return {"deal": None, "items": []}
+
+        rows = connection.execute(
+            """
+            select
+                p.id,
+                p.payment_date,
+                p.amount_rub,
+                p.raw_counterparty,
+                p.description,
+                p.source_sheet,
+                p.source_row,
+                a.name as account_name,
+                pa.allocated_amount_rub,
+                pa.match_confidence
+            from payment_allocations pa
+            join payments p on p.id = pa.payment_id
+            join financial_accounts a on a.id = p.account_id
+            where pa.deal_id = %(deal_id)s
+            order by p.payment_date, p.id
+            """,
+            {"deal_id": deal_id},
+        ).fetchall()
+
+    return {
+        "deal": dict(deal),
+        "items": [
+            {
+                **dict(row),
+                "payment_date": row["payment_date"].isoformat(),
+                "amount_rub": money(row["amount_rub"]),
+                "allocated_amount_rub": money(
+                    row["allocated_amount_rub"]
+                ),
+            }
+            for row in rows
+        ],
+    }
+
+
 @app.get("/api/imports/staging-summary")
 def staging_import_summary() -> dict:
     with database() as connection:
