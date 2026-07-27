@@ -587,7 +587,20 @@ td .progress + small { display: inline; }
 .data-badge.match-unmatched,
 .data-badge.match-review { background: var(--orange-soft); color: var(--orange); }
 .data-badge.match-matched { background: var(--green-soft); color: var(--green); }
-.deals-table { min-width: 850px; width: 100%; table-layout: fixed; }
+.payments-table { min-width: 1050px; table-layout: fixed; }
+.payments-table th:nth-child(1),
+.payments-table td:nth-child(1) { width: 11%; }
+.payments-table th:nth-child(2),
+.payments-table td:nth-child(2) { width: 34%; min-width: 0; }
+.payments-table th:nth-child(3),
+.payments-table td:nth-child(3) { width: 15%; min-width: 0; }
+.payments-table th:nth-child(4),
+.payments-table td:nth-child(4) { width: 18%; min-width: 0; }
+.payments-table th:nth-child(5),
+.payments-table td:nth-child(5) { width: 12%; }
+.payments-table th:nth-child(6),
+.payments-table td:nth-child(6) { width: 10%; }
+.deals-table { min-width: 1050px; width: 100%; table-layout: fixed; }
 .deals-table th,
 .deals-table td { padding: 8px; }
 .deals-filter-row th { padding: 5px 4px 7px; }
@@ -605,14 +618,15 @@ td .progress + small { display: inline; }
 }
 .deals-filter-row input::placeholder { color: var(--muted); }
 .deals-table td small { margin-top: 2px; }
-.deals-table td:nth-child(1) { width: 22%; min-width: 0; }
-.deals-table td:nth-child(2) { width: 10%; min-width: 0; }
-.deals-table td:nth-child(3) { width: 12%; min-width: 0; }
+.deals-table td:nth-child(1) { width: 17%; min-width: 0; }
+.deals-table td:nth-child(2) { width: 11%; min-width: 0; }
+.deals-table td:nth-child(3) { width: 8%; min-width: 0; }
 .deals-table td:nth-child(4) { width: 10%; min-width: 0; }
-.deals-table td:nth-child(5),
+.deals-table td:nth-child(5) { width: 10%; min-width: 0; }
 .deals-table td:nth-child(6),
 .deals-table td:nth-child(7),
-.deals-table td:nth-child(8) { width: 11.5%; min-width: 0; white-space: nowrap; }
+.deals-table td:nth-child(8),
+.deals-table td:nth-child(9) { width: 11%; min-width: 0; white-space: nowrap; }
 .deals-total-row td {
   padding-top: 11px;
   padding-bottom: 11px;

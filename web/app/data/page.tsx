@@ -9,6 +9,7 @@ type Dataset = "payments" | "deals" | "aliases";
 type DealFilter = "all" | "open" | "closed" | "unmatched";
 type DealColumnFilters = {
   customer: string;
+  manager: string;
   documentType: string;
   documentNumber: string;
   openedOn: string;
@@ -29,6 +30,7 @@ type Payment = {
   source_row: number | null;
   is_internal_transfer: boolean;
   account_name: string;
+  manager_name: string | null;
 };
 
 type Deal = {
@@ -135,6 +137,7 @@ export default function LoadedDataPage() {
   const [dealFilter, setDealFilter] = useState<DealFilter>("all");
   const [dealColumnFilters, setDealColumnFilters] = useState<DealColumnFilters>({
     customer: "",
+    manager: "",
     documentType: "",
     documentNumber: "",
     openedOn: "",
@@ -175,6 +178,7 @@ export default function LoadedDataPage() {
       if (dataset === "deals") {
         const dealParams = {
           customer: dealColumnFilters.customer,
+          manager: dealColumnFilters.manager,
           document_type: dealColumnFilters.documentType,
           document_number: dealColumnFilters.documentNumber,
           opened_on: dealColumnFilters.openedOn,
@@ -231,6 +235,7 @@ export default function LoadedDataPage() {
     setDealFilter("all");
     setDealColumnFilters({
       customer: "",
+      manager: "",
       documentType: "",
       documentNumber: "",
       openedOn: "",
@@ -455,18 +460,19 @@ export default function LoadedDataPage() {
 
           <div className="loaded-table-wrap">
             {dataset === "payments" ? (
-              <table className="loaded-table">
+              <table className="loaded-table payments-table">
                 <thead>
                   <tr>
                     <th>Дата</th>
                     <th>Контрагент и описание</th>
+                    <th>Менеджер</th>
                     <th>Счёт / источник</th>
                     <th>Сумма</th>
                     <th>Тип</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {loading && <tr><td colSpan={5} className="review-empty">Загрузка…</td></tr>}
+                  {loading && <tr><td colSpan={6} className="review-empty">Загрузка…</td></tr>}
                   {!loading && payments?.items.map((item) => (
                     <tr key={item.id}>
                       <td><strong>{date(item.payment_date)}</strong></td>
@@ -474,6 +480,7 @@ export default function LoadedDataPage() {
                         <strong>{item.raw_counterparty || "Не указан"}</strong>
                         <small>{item.description || "Без пояснения"}</small>
                       </td>
+                      <td>{item.manager_name || "—"}</td>
                       <td>
                         <strong>{item.account_name}</strong>
                         <small>{item.source_sheet}, строка {item.source_row}</small>
@@ -493,6 +500,7 @@ export default function LoadedDataPage() {
                 <thead>
                   <tr>
                     <th>Покупатель</th>
+                    <th>Менеджер</th>
                     <th>Документ</th>
                     <th>Номер</th>
                     <th>Дата документа</th>
@@ -509,6 +517,15 @@ export default function LoadedDataPage() {
                         value={dealColumnFilters.customer}
                         placeholder="Покупатель"
                         onChange={(event) => updateDealColumnFilter("customer", event.target.value)}
+                      />
+                    </th>
+                    <th>
+                      <input
+                        aria-label="Поиск по менеджеру"
+                        type="search"
+                        value={dealColumnFilters.manager}
+                        placeholder="Менеджер"
+                        onChange={(event) => updateDealColumnFilter("manager", event.target.value)}
                       />
                     </th>
                     <th>
@@ -577,7 +594,7 @@ export default function LoadedDataPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {loading && <tr><td colSpan={8} className="review-empty">Загрузка…</td></tr>}
+                  {loading && <tr><td colSpan={9} className="review-empty">Загрузка…</td></tr>}
                   {!loading && deals?.items.map((item) => (
                       <tr
                         key={item.id}
@@ -595,6 +612,7 @@ export default function LoadedDataPage() {
                         <td className="loaded-description">
                           <strong>{item.customer_name}</strong>
                         </td>
+                        <td>{item.manager_name || "—"}</td>
                         <td>{item.original_document_type || "Документ"}</td>
                         <td>{item.original_document_number || "—"}</td>
                         <td>{date(item.opened_on)}</td>
@@ -622,7 +640,7 @@ export default function LoadedDataPage() {
                 {!loading && deals?.totals && (
                   <tfoot>
                     <tr className="deals-total-row">
-                      <td colSpan={4}>Итого по выборке</td>
+                      <td colSpan={5}>Итого по выборке</td>
                       <td />
                       <td />
                       <td>{rub(deals.totals.balance_rub)}</td>

@@ -300,10 +300,18 @@ def loaded_payments(
                 p.raw_counterparty ilike %s
                 or p.description ilike %s
                 or p.source_sheet ilike %s
+                or exists (
+                    select 1
+                    from payment_allocations search_pa
+                    join deals search_d on search_d.id = search_pa.deal_id
+                    join employees search_e on search_e.id = search_d.manager_id
+                    where search_pa.payment_id = p.id
+                      and search_e.full_name ilike %s
+                )
             )
             """
         )
-        params.extend([term, term, term])
+        params.extend([term, term, term, term])
 
     where_sql = f"where {' and '.join(conditions)}"
     offset = (page - 1) * page_size
@@ -329,9 +337,20 @@ def loaded_payments(
                 p.source_sheet,
                 p.source_row,
                 p.is_internal_transfer,
-                a.name as account_name
+                a.name as account_name,
+                managers.manager_name
             from payments p
             join financial_accounts a on a.id = p.account_id
+            left join lateral (
+                select string_agg(
+                    distinct e.full_name,
+                    ', ' order by e.full_name
+                ) as manager_name
+                from payment_allocations pa
+                join deals d on d.id = pa.deal_id
+                join employees e on e.id = d.manager_id
+                where pa.payment_id = p.id
+            ) managers on true
             {where_sql}
             order by p.payment_date desc, p.id desc
             limit %s offset %s
@@ -436,6 +455,7 @@ def loaded_deals(
     customer: str | None = Query(default=None, max_length=200),
     document_type: str | None = Query(default=None, max_length=100),
     document_number: str | None = Query(default=None, max_length=100),
+    manager: str | None = Query(default=None, max_length=200),
     opened_on: str | None = Query(default=None, max_length=20),
     planned_revenue_rub: str | None = Query(default=None, max_length=50),
     paid_amount_rub: str | None = Query(default=None, max_length=50),
@@ -468,6 +488,7 @@ def loaded_deals(
         params.extend([term, term, term, term])
     column_text_filters = [
         ("c.name", customer),
+        ("e.full_name", manager),
         ("d.original_document_type", document_type),
         ("d.original_document_number", document_number),
         ("cast(d.opened_on as text)", opened_on),
