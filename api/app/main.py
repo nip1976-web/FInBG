@@ -433,6 +433,15 @@ def loaded_deals(
     match_status: Literal["unmatched", "matched", "review"] | None = None,
     without_match: bool = False,
     search: str | None = Query(default=None, max_length=200),
+    customer: str | None = Query(default=None, max_length=200),
+    document_type: str | None = Query(default=None, max_length=100),
+    document_number: str | None = Query(default=None, max_length=100),
+    opened_on: str | None = Query(default=None, max_length=20),
+    planned_revenue_rub: str | None = Query(default=None, max_length=50),
+    paid_amount_rub: str | None = Query(default=None, max_length=50),
+    balance_rub: str | None = Query(default=None, max_length=50),
+    balance_eur: float | None = None,
+    eur_rate: float | None = Query(default=None, gt=0),
 ) -> dict:
     conditions = ["d.source = 'buyers'"]
     params: list[object] = []
@@ -457,6 +466,29 @@ def loaded_deals(
             """
         )
         params.extend([term, term, term, term])
+    column_text_filters = [
+        ("c.name", customer),
+        ("d.original_document_type", document_type),
+        ("d.original_document_number", document_number),
+        ("cast(d.opened_on as text)", opened_on),
+    ]
+    for expression, value in column_text_filters:
+        if value and value.strip():
+            conditions.append(f"coalesce({expression}, '') ilike %s")
+            params.append(f"%{value.strip()}%")
+    numeric_text_filters = [
+        ("d.planned_revenue_rub", planned_revenue_rub),
+        ("d.paid_amount_rub", paid_amount_rub),
+        ("d.balance_rub", balance_rub),
+    ]
+    for expression, value in numeric_text_filters:
+        if value and value.strip():
+            normalized = value.replace(" ", "").replace(",", ".").strip()
+            conditions.append(f"cast({expression} as text) ilike %s")
+            params.append(f"%{normalized}%")
+    if balance_eur is not None and eur_rate is not None:
+        conditions.append("round(d.balance_rub / %s, 2) = round(%s, 2)")
+        params.extend([eur_rate, balance_eur])
 
     where_sql = f"where {' and '.join(conditions)}"
     offset = (page - 1) * page_size

@@ -7,6 +7,16 @@ const API_URL =
 
 type Dataset = "payments" | "deals" | "aliases";
 type DealFilter = "all" | "open" | "closed" | "unmatched";
+type DealColumnFilters = {
+  customer: string;
+  documentType: string;
+  documentNumber: string;
+  openedOn: string;
+  plannedRevenue: string;
+  paidAmount: string;
+  balanceRub: string;
+  balanceEur: string;
+};
 
 type Payment = {
   id: number;
@@ -123,6 +133,16 @@ export default function LoadedDataPage() {
   const [manualSavingPaymentId, setManualSavingPaymentId] = useState<number | null>(null);
   const [manualError, setManualError] = useState("");
   const [dealFilter, setDealFilter] = useState<DealFilter>("all");
+  const [dealColumnFilters, setDealColumnFilters] = useState<DealColumnFilters>({
+    customer: "",
+    documentType: "",
+    documentNumber: "",
+    openedOn: "",
+    plannedRevenue: "",
+    paidAmount: "",
+    balanceRub: "",
+    balanceEur: "",
+  });
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
@@ -152,6 +172,25 @@ export default function LoadedDataPage() {
       if (dataset === "deals" && dealFilter === "unmatched") {
         params.set("without_match", "true");
       }
+      if (dataset === "deals") {
+        const dealParams = {
+          customer: dealColumnFilters.customer,
+          document_type: dealColumnFilters.documentType,
+          document_number: dealColumnFilters.documentNumber,
+          opened_on: dealColumnFilters.openedOn,
+          planned_revenue_rub: dealColumnFilters.plannedRevenue,
+          paid_amount_rub: dealColumnFilters.paidAmount,
+          balance_rub: dealColumnFilters.balanceRub,
+        };
+        Object.entries(dealParams).forEach(([key, value]) => {
+          if (value.trim()) params.set(key, value.trim());
+        });
+        const balanceEur = Number(dealColumnFilters.balanceEur.replace(",", "."));
+        if (dealColumnFilters.balanceEur.trim() && Number.isFinite(balanceEur) && eurRate) {
+          params.set("balance_eur", String(balanceEur));
+          params.set("eur_rate", eurRate.rate);
+        }
+      }
       const rowsResponse = await fetch(
         `${API_URL}${endpoint}?${params.toString()}`
       );
@@ -167,7 +206,7 @@ export default function LoadedDataPage() {
     } finally {
       setLoading(false);
     }
-  }, [dataset, dealFilter, page, search]);
+  }, [dataset, dealFilter, dealColumnFilters, eurRate, page, search]);
 
   useEffect(() => {
     load();
@@ -190,6 +229,25 @@ export default function LoadedDataPage() {
     setPage(1);
     setSearch("");
     setDealFilter("all");
+    setDealColumnFilters({
+      customer: "",
+      documentType: "",
+      documentNumber: "",
+      openedOn: "",
+      plannedRevenue: "",
+      paidAmount: "",
+      balanceRub: "",
+      balanceEur: "",
+    });
+    setSelectedDealId(null);
+  };
+
+  const updateDealColumnFilter = (
+    key: keyof DealColumnFilters,
+    value: string
+  ) => {
+    setDealColumnFilters((current) => ({ ...current, [key]: value }));
+    setPage(1);
     setSelectedDealId(null);
   };
 
@@ -322,69 +380,76 @@ export default function LoadedDataPage() {
         </p>
 
         <section className="loaded-panel">
-          <div className="dataset-tabs" role="tablist" aria-label="Источники данных">
-            <button
-              className={dataset === "payments" ? "active" : ""}
-              onClick={() => chooseDataset("payments")}
-              role="tab"
-              aria-selected={dataset === "payments"}
-            >
-              Входящие Payments
-            </button>
-            <button
-              className={dataset === "deals" ? "active" : ""}
-              onClick={() => chooseDataset("deals")}
-              role="tab"
-              aria-selected={dataset === "deals"}
-            >
-              Сделки Buyers
-            </button>
-            <button
-              className={dataset === "aliases" ? "active" : ""}
-              onClick={() => chooseDataset("aliases")}
-              role="tab"
-              aria-selected={dataset === "aliases"}
-            >
-              Соответствия клиентов
-            </button>
+          <div className="dataset-header">
+            <div className="dataset-tabs" role="tablist" aria-label="Источники данных">
+              <button
+                className={dataset === "payments" ? "active" : ""}
+                onClick={() => chooseDataset("payments")}
+                role="tab"
+                aria-selected={dataset === "payments"}
+              >
+                Входящие Payments
+              </button>
+              <button
+                className={dataset === "deals" ? "active" : ""}
+                onClick={() => chooseDataset("deals")}
+                role="tab"
+                aria-selected={dataset === "deals"}
+              >
+                Сделки Buyers
+              </button>
+              <button
+                className={dataset === "aliases" ? "active" : ""}
+                onClick={() => chooseDataset("aliases")}
+                role="tab"
+                aria-selected={dataset === "aliases"}
+              >
+                Соответствия клиентов
+              </button>
+            </div>
+            {dataset === "deals" && (
+              <div className="deals-header-tools">
+                <label className="deal-filter">
+                  <span>Состояние</span>
+                  <select
+                    value={dealFilter}
+                    onChange={(event) => {
+                      setDealFilter(event.target.value as DealFilter);
+                      setPage(1);
+                    }}
+                  >
+                    <option value="all">Все сделки</option>
+                    <option value="open">Открытые</option>
+                    <option value="closed">Закрытые</option>
+                    <option value="unmatched">Без связи с платежом</option>
+                  </select>
+                </label>
+                <span className="dataset-count">
+                  Найдено: <strong>{current?.total ?? 0}</strong>
+                </span>
+              </div>
+            )}
           </div>
 
-          <div className="loaded-toolbar">
-            <label>
-              <span>Поиск</span>
-              <input
-                type="search"
-                value={search}
-                placeholder={
-                  dataset === "payments"
+          {dataset !== "deals" && (
+            <div className="loaded-toolbar">
+              <label>
+                <span>Поиск</span>
+                <input
+                  type="search"
+                  value={search}
+                  placeholder={dataset === "payments"
                     ? "Контрагент или описание…"
-                    : "Клиент, сделка или менеджер…"
-                }
-                onChange={(event) => {
-                  setSearch(event.target.value);
-                  setPage(1);
-                }}
-              />
-            </label>
-            {dataset === "deals" && (
-              <label className="deal-filter">
-                <span>Состояние</span>
-                <select
-                  value={dealFilter}
+                    : "Название плательщика или клиента…"}
                   onChange={(event) => {
-                    setDealFilter(event.target.value as DealFilter);
+                    setSearch(event.target.value);
                     setPage(1);
                   }}
-                >
-                  <option value="all">Все сделки</option>
-                  <option value="open">Открытые</option>
-                  <option value="closed">Закрытые</option>
-                  <option value="unmatched">Без связи с платежом</option>
-                </select>
+                />
               </label>
-            )}
-            <span>{dataset === "aliases" ? "Предложено" : "Найдено"}: <strong>{current?.total ?? 0}</strong></span>
-          </div>
+              <span>{dataset === "aliases" ? "Предложено" : "Найдено"}: <strong>{current?.total ?? 0}</strong></span>
+            </div>
+          )}
 
           {error && <div className="review-error">{error}</div>}
 
@@ -435,6 +500,80 @@ export default function LoadedDataPage() {
                     <th>Оплачено клиентом</th>
                     <th>Остаток</th>
                     <th>Остаток, EUR</th>
+                  </tr>
+                  <tr className="deals-filter-row">
+                    <th>
+                      <input
+                        aria-label="Поиск по покупателю"
+                        type="search"
+                        value={dealColumnFilters.customer}
+                        placeholder="Покупатель"
+                        onChange={(event) => updateDealColumnFilter("customer", event.target.value)}
+                      />
+                    </th>
+                    <th>
+                      <input
+                        aria-label="Поиск по типу документа"
+                        type="search"
+                        value={dealColumnFilters.documentType}
+                        placeholder="Тип"
+                        onChange={(event) => updateDealColumnFilter("documentType", event.target.value)}
+                      />
+                    </th>
+                    <th>
+                      <input
+                        aria-label="Поиск по номеру документа"
+                        type="search"
+                        value={dealColumnFilters.documentNumber}
+                        placeholder="Номер"
+                        onChange={(event) => updateDealColumnFilter("documentNumber", event.target.value)}
+                      />
+                    </th>
+                    <th>
+                      <input
+                        aria-label="Поиск по дате документа"
+                        type="search"
+                        value={dealColumnFilters.openedOn}
+                        placeholder="ГГГГ-ММ-ДД"
+                        onChange={(event) => updateDealColumnFilter("openedOn", event.target.value)}
+                      />
+                    </th>
+                    <th>
+                      <input
+                        aria-label="Поиск по сумме сделки"
+                        inputMode="decimal"
+                        value={dealColumnFilters.plannedRevenue}
+                        placeholder="Сумма"
+                        onChange={(event) => updateDealColumnFilter("plannedRevenue", event.target.value)}
+                      />
+                    </th>
+                    <th>
+                      <input
+                        aria-label="Поиск по оплаченной сумме"
+                        inputMode="decimal"
+                        value={dealColumnFilters.paidAmount}
+                        placeholder="Оплачено"
+                        onChange={(event) => updateDealColumnFilter("paidAmount", event.target.value)}
+                      />
+                    </th>
+                    <th>
+                      <input
+                        aria-label="Поиск по остатку в рублях"
+                        inputMode="decimal"
+                        value={dealColumnFilters.balanceRub}
+                        placeholder="Остаток"
+                        onChange={(event) => updateDealColumnFilter("balanceRub", event.target.value)}
+                      />
+                    </th>
+                    <th>
+                      <input
+                        aria-label="Поиск по остатку в евро"
+                        inputMode="decimal"
+                        value={dealColumnFilters.balanceEur}
+                        placeholder="EUR"
+                        onChange={(event) => updateDealColumnFilter("balanceEur", event.target.value)}
+                      />
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
