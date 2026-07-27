@@ -61,7 +61,13 @@ def database():
 
 
 def money(value: Decimal | None) -> str:
-    return str(value or Decimal("0.00"))
+    return str((value or Decimal("0.00")).quantize(Decimal("0.01")))
+
+
+def ilike_term(value: str) -> str:
+    """Escape LIKE metacharacters so user input can't widen its own filter."""
+    escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
 
 
 @app.get("/api/reference/eur-rate")
@@ -293,7 +299,7 @@ def loaded_payments(
     ]
     params: list[object] = []
     if search and search.strip():
-        term = f"%{search.strip()}%"
+        term = ilike_term(search.strip())
         conditions.append(
             """
             (
@@ -344,11 +350,17 @@ def loaded_payments(
                 p.source_row,
                 p.is_internal_transfer,
                 a.name as account_name,
-                coalesce(bitrix_assignment.manager_name, managers.manager_name) as manager_name
+                coalesce(
+                    bitrix_employee.full_name,
+                    bitrix_assignment.manager_name,
+                    managers.manager_name
+                ) as manager_name
             from payments p
             join financial_accounts a on a.id = p.account_id
             left join payment_manager_assignments bitrix_assignment
               on bitrix_assignment.payment_id = p.id
+            left join employees bitrix_employee
+              on bitrix_employee.id = bitrix_assignment.manager_id
             left join lateral (
                 select string_agg(
                     distinct e.full_name,
@@ -390,7 +402,7 @@ def loaded_customer_receipts(
     conditions: list[str] = []
     params: list[object] = []
     if search and search.strip():
-        term = f"%{search.strip()}%"
+        term = ilike_term(search.strip())
         conditions.append(
             """
             (
@@ -482,7 +494,7 @@ def loaded_deals(
     if without_match:
         conditions.append("d.match_status <> 'matched'")
     if search and search.strip():
-        term = f"%{search.strip()}%"
+        term = ilike_term(search.strip())
         conditions.append(
             """
             (
@@ -504,7 +516,7 @@ def loaded_deals(
     for expression, value in column_text_filters:
         if value and value.strip():
             conditions.append(f"coalesce({expression}, '') ilike %s")
-            params.append(f"%{value.strip()}%")
+            params.append(ilike_term(value.strip()))
     numeric_text_filters = [
         ("d.planned_revenue_rub", planned_revenue_rub),
         ("d.paid_amount_rub", paid_amount_rub),
@@ -514,7 +526,7 @@ def loaded_deals(
         if value and value.strip():
             normalized = value.replace(" ", "").replace(",", ".").strip()
             conditions.append(f"cast({expression} as text) ilike %s")
-            params.append(f"%{normalized}%")
+            params.append(ilike_term(normalized))
     if balance_eur is not None and eur_rate is not None:
         conditions.append("round(d.balance_rub / %s, 2) = round(%s, 2)")
         params.extend([eur_rate, balance_eur])
@@ -719,7 +731,7 @@ def available_payments_for_allocation(
     ]
     params: list[object] = []
     if search and search.strip():
-        term = f"%{search.strip()}%"
+        term = ilike_term(search.strip())
         conditions.append(
             "(p.raw_counterparty ilike %s or p.description ilike %s)"
         )
@@ -1035,7 +1047,7 @@ def staging_operations(
     if missing_category:
         conditions.append("(category is null or btrim(category) = '')")
     if search and search.strip():
-        term = f"%{search.strip()}%"
+        term = ilike_term(search.strip())
         conditions.append(
             """
             (

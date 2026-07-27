@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 const API_URL =
   process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -150,8 +150,12 @@ export default function LoadedDataPage() {
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const loadAbortRef = useRef<AbortController | null>(null);
 
   const load = useCallback(async () => {
+    loadAbortRef.current?.abort();
+    const controller = new AbortController();
+    loadAbortRef.current = controller;
     setLoading(true);
     setError("");
     const params = new URLSearchParams({
@@ -196,30 +200,37 @@ export default function LoadedDataPage() {
         }
       }
       const rowsResponse = await fetch(
-        `${API_URL}${endpoint}?${params.toString()}`
+        `${API_URL}${endpoint}?${params.toString()}`,
+        { signal: controller.signal }
       );
       if (!rowsResponse.ok) {
         throw new Error("Не удалось получить загруженные данные");
       }
       const payload = await rowsResponse.json();
+      if (loadAbortRef.current !== controller) return; // superseded by a newer request
       if (dataset === "payments") setPayments(payload);
       else if (dataset === "deals") setDeals(payload);
       else setAliases(payload);
     } catch (requestError) {
+      if ((requestError as Error).name === "AbortError") return;
       setError((requestError as Error).message);
     } finally {
-      setLoading(false);
+      if (loadAbortRef.current === controller) setLoading(false);
     }
   }, [dataset, dealFilter, dealColumnFilters, eurRate, page, search]);
 
   useEffect(() => {
-    load();
+    const timeout = setTimeout(() => {
+      load();
+    }, 300);
+    return () => clearTimeout(timeout);
   }, [load]);
 
   useEffect(() => {
     fetch(`${API_URL}/api/reference/eur-rate`)
-      .then((response) => response.ok ? response.json() : null)
-      .then((payload) => setEurRate(payload));
+      .then((response) => (response.ok ? response.json() : null))
+      .then((payload) => setEurRate(payload))
+      .catch(() => setEurRate(null));
   }, []);
 
   const current = dataset === "payments" ? payments : dataset === "deals" ? deals : aliases;
