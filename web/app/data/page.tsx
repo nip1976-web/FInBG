@@ -484,8 +484,8 @@ export default function LoadedDataPage() {
                   <tfoot>
                     <tr className="deals-total-row">
                       <td colSpan={4}>Итого по выборке</td>
-                      <td>{rub(deals.totals.planned_revenue_rub)}</td>
-                      <td>{rub(deals.totals.paid_amount_rub)}</td>
+                      <td />
+                      <td />
                       <td>{rub(deals.totals.balance_rub)}</td>
                       <td>
                         {eurRate
