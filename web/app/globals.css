@@ -553,6 +553,15 @@ td .progress + small { display: inline; }
 .deals-table td:nth-child(6),
 .deals-table td:nth-child(7),
 .deals-table td:nth-child(8) { width: 11.5%; min-width: 0; white-space: nowrap; }
+.deals-total-row td {
+  padding-top: 11px;
+  padding-bottom: 11px;
+  border-top: 2px solid var(--green);
+  background: var(--surface-soft);
+  font-weight: 750;
+  white-space: nowrap;
+}
+.deals-total-row td:first-child { text-align: right; }
 .deal-row { cursor: pointer; transition: background-color .15s ease; }
 .deal-row:hover,
 .deal-row:focus,

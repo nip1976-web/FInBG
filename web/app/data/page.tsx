@@ -42,10 +42,17 @@ type Deal = {
   linked_payment_amount_rub: string | null;
 };
 
+type DealTotals = {
+  planned_revenue_rub: string;
+  paid_amount_rub: string;
+  balance_rub: string;
+};
+
 type PageResponse<T> = {
   page: number;
   page_size: number;
   total: number;
+  totals?: DealTotals;
   items: T[];
 };
 
@@ -473,6 +480,21 @@ export default function LoadedDataPage() {
                       </tr>
                   ))}
                 </tbody>
+                {!loading && deals?.totals && (
+                  <tfoot>
+                    <tr className="deals-total-row">
+                      <td colSpan={4}>Итого по выборке</td>
+                      <td>{rub(deals.totals.planned_revenue_rub)}</td>
+                      <td>{rub(deals.totals.paid_amount_rub)}</td>
+                      <td>{rub(deals.totals.balance_rub)}</td>
+                      <td>
+                        {eurRate
+                          ? eur(Number(deals.totals.balance_rub) / Number(eurRate.rate))
+                          : "—"}
+                      </td>
+                    </tr>
+                  </tfoot>
+                )}
               </table>
             ) : (
               <table className="loaded-table aliases-table">

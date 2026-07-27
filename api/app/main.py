@@ -472,6 +472,19 @@ def loaded_deals(
             """,
             params,
         ).fetchone()["total"]
+        totals = connection.execute(
+            f"""
+            select
+                coalesce(sum(d.planned_revenue_rub), 0) as planned_revenue_rub,
+                coalesce(sum(d.paid_amount_rub), 0) as paid_amount_rub,
+                coalesce(sum(d.balance_rub), 0) as balance_rub
+            from deals d
+            join counterparties c on c.id = d.customer_id
+            left join employees e on e.id = d.manager_id
+            {where_sql}
+            """,
+            params,
+        ).fetchone()
         rows = connection.execute(
             f"""
             select
@@ -518,6 +531,11 @@ def loaded_deals(
         "page": page,
         "page_size": page_size,
         "total": total,
+        "totals": {
+            "planned_revenue_rub": money(totals["planned_revenue_rub"]),
+            "paid_amount_rub": money(totals["paid_amount_rub"]),
+            "balance_rub": money(totals["balance_rub"]),
+        },
         "items": [
             {
                 **dict(row),
