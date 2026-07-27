@@ -510,7 +510,13 @@ td .progress + small { display: inline; }
 .loaded-toolbar > span { color: var(--muted); font-size: 11px; }
 .loaded-table-wrap { overflow-x: auto; }
 .deal-selected .loaded-table-wrap { min-height: 0; overflow: auto; }
-.deal-selected .loaded-table thead { position: sticky; top: 0; z-index: 1; }
+.deal-selected .loaded-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--surface);
+  box-shadow: 0 1px 0 var(--line);
+}
 .loaded-table { min-width: 980px; }
 .loaded-table td { vertical-align: top; white-space: normal; }
 .loaded-table td:nth-child(1) { width: 125px; }

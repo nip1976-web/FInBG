@@ -244,7 +244,17 @@ export default function LoadedDataPage() {
     setSelectedDealId(dealId);
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
-        row.scrollIntoView({ behavior: "smooth", block: "start" });
+        const tableWrap = row.closest<HTMLDivElement>(".loaded-table-wrap");
+        const tableHeader = tableWrap?.querySelector<HTMLTableSectionElement>("thead");
+        if (!tableWrap || !tableHeader) return;
+
+        const targetTop =
+          tableWrap.scrollTop +
+          row.getBoundingClientRect().top -
+          tableWrap.getBoundingClientRect().top -
+          tableHeader.getBoundingClientRect().height;
+
+        tableWrap.scrollTo({ top: Math.max(0, targetTop), behavior: "smooth" });
       });
     });
     loadCandidatePayments(dealId);
