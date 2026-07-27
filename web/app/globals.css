@@ -634,6 +634,7 @@ td .progress + small { display: inline; }
 .manual-link-buttons button:disabled { opacity: .55; cursor: default; }
 .manual-link-error { grid-column: 1 / -1; color: var(--red); font-size: 10px; }
 .candidate-payments { border-bottom: 1px solid var(--line); }
+.deal-row { scroll-margin-top: 16px; }
 .candidate-payments-title {
   padding: 10px 14px;
   display: flex;

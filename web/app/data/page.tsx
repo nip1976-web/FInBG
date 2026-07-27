@@ -236,12 +236,17 @@ export default function LoadedDataPage() {
     }
   };
 
-  const selectDeal = async (dealId: number) => {
+  const selectDeal = async (dealId: number, row: HTMLTableRowElement) => {
     if (selectedDealId === dealId) {
       setSelectedDealId(null);
       return;
     }
     setSelectedDealId(dealId);
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        row.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    });
     loadCandidatePayments(dealId);
     if (dealPayments[dealId]) return;
 
@@ -423,11 +428,11 @@ export default function LoadedDataPage() {
                         className={selectedDealId === item.id ? "deal-row selected" : "deal-row"}
                         tabIndex={0}
                         aria-expanded={selectedDealId === item.id}
-                        onClick={() => selectDeal(item.id)}
+                        onClick={(event) => selectDeal(item.id, event.currentTarget)}
                         onKeyDown={(event) => {
                           if (event.key === "Enter" || event.key === " ") {
                             event.preventDefault();
-                            selectDeal(item.id);
+                            selectDeal(item.id, event.currentTarget);
                           }
                         }}
                       >
