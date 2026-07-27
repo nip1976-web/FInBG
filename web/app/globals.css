@@ -467,7 +467,7 @@ td .progress + small { display: inline; }
 .dataset-header {
   display: flex;
   align-items: stretch;
-  gap: 14px;
+  gap: clamp(36px, 5vw, 80px);
   border-bottom: 1px solid var(--line);
 }
 .dataset-tabs {
@@ -490,7 +490,7 @@ td .progress + small { display: inline; }
 .deals-header-tools {
   min-width: 360px;
   margin-left: auto;
-  padding: 7px 16px;
+  padding: 7px 16px 7px clamp(24px, 3vw, 52px);
   display: flex;
   align-items: flex-end;
   justify-content: flex-end;
@@ -555,6 +555,14 @@ td .progress + small { display: inline; }
   box-shadow: 0 1px 0 var(--line);
 }
 .deal-selected .loaded-table thead .deals-filter-row th { top: 32px; }
+.deals-table thead tr:first-child th {
+  background: var(--green-soft);
+  color: var(--green-dark);
+  box-shadow: inset 0 -1px 0 var(--line);
+}
+.deals-table thead .deals-filter-row th {
+  background: #f1f6f2;
+}
 .loaded-table { min-width: 980px; }
 .loaded-table td { vertical-align: top; white-space: normal; }
 .loaded-table td:nth-child(1) { width: 125px; }
