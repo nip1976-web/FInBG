@@ -1,0 +1,17 @@
+[Unit]
+Description=FinBG Bitrix payment manager sync
+After=network-online.target postgresql.service
+
+[Service]
+Type=oneshot
+User=finbg
+Group=finbg
+WorkingDirectory=/opt/finbg/api
+Environment=DATABASE_URL=dbname=finbg
+ExecStart=/opt/finbg/venv/bin/python /opt/finbg/api/scripts/sync_bitrix_payment_managers.py --apply
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/opt/finbg
+

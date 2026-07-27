@@ -1,0 +1,11 @@
+[Unit]
+Description=Run FinBG Bitrix payment manager sync every 15 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=15min
+Persistent=true
+Unit=finbg-bitrix-sync.service
+
+[Install]
+WantedBy=timers.target

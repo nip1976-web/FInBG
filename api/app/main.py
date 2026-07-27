@@ -308,10 +308,16 @@ def loaded_payments(
                     where search_pa.payment_id = p.id
                       and search_e.full_name ilike %s
                 )
+                or exists (
+                    select 1
+                    from payment_manager_assignments search_assignment
+                    where search_assignment.payment_id = p.id
+                      and search_assignment.manager_name ilike %s
+                )
             )
             """
         )
-        params.extend([term, term, term, term])
+        params.extend([term, term, term, term, term])
 
     where_sql = f"where {' and '.join(conditions)}"
     offset = (page - 1) * page_size
@@ -338,9 +344,11 @@ def loaded_payments(
                 p.source_row,
                 p.is_internal_transfer,
                 a.name as account_name,
-                managers.manager_name
+                coalesce(bitrix_assignment.manager_name, managers.manager_name) as manager_name
             from payments p
             join financial_accounts a on a.id = p.account_id
+            left join payment_manager_assignments bitrix_assignment
+              on bitrix_assignment.payment_id = p.id
             left join lateral (
                 select string_agg(
                     distinct e.full_name,
