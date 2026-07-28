@@ -49,10 +49,20 @@ type Payment = {
   bitrix_invoice_id: number | null;
   bitrix_excluded: boolean;
   bitrix_exclusion_note: string | null;
+  bitrix_skipped: boolean;
   bitrix_mismatch: boolean;
 };
 
 type DocumentKind = "invoice" | "spec";
+
+const DATE_FILTER_HINT = [
+  "Можно вводить:",
+  "280726 — один день, шесть цифр без точек",
+  "28.07.2026 — тот же день с точками",
+  "07.2026 — весь месяц",
+  "2026 — весь год",
+  "010326-150326 — диапазон",
+].join("\n");
 
 type BitrixExclusion = {
   id: number;
@@ -190,6 +200,8 @@ export default function LoadedDataPage() {
   const [exclusions, setExclusions] = useState<BitrixExclusion[]>([]);
   const [excludingCounterparty, setExcludingCounterparty] = useState<string | null>(null);
   const [showExclusions, setShowExclusions] = useState(false);
+  const [newExclusion, setNewExclusion] = useState("");
+  const [savingSkipId, setSavingSkipId] = useState<number | null>(null);
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
@@ -436,17 +448,52 @@ export default function LoadedDataPage() {
     }
   };
 
+  const skipBitrixCheck = async (paymentId: number) => {
+    setSavingSkipId(paymentId);
+    setError("");
+    try {
+      const response = await fetch(`${API_URL}/api/data/payments/${paymentId}/bitrix-skip`, {
+        method: "POST",
+      });
+      if (!response.ok) throw new Error("Не удалось пометить платёж.");
+      load();
+    } catch (requestError) {
+      setError((requestError as Error).message);
+    } finally {
+      setSavingSkipId(null);
+    }
+  };
+
+  const unskipBitrixCheck = async (paymentId: number) => {
+    setSavingSkipId(paymentId);
+    setError("");
+    try {
+      const response = await fetch(`${API_URL}/api/data/payments/${paymentId}/bitrix-skip`, {
+        method: "DELETE",
+      });
+      if (!response.ok) throw new Error("Не удалось вернуть платёж в проверку.");
+      load();
+    } catch (requestError) {
+      setError((requestError as Error).message);
+    } finally {
+      setSavingSkipId(null);
+    }
+  };
+
   const excludeCounterparty = async (counterparty: string) => {
-    setExcludingCounterparty(counterparty);
+    const pattern = counterparty.trim();
+    if (!pattern) return;
+    setExcludingCounterparty(pattern);
     setError("");
     try {
       const response = await fetch(`${API_URL}/api/data/bitrix-exclusions`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ counterparty_pattern: counterparty }),
+        body: JSON.stringify({ counterparty_pattern: pattern }),
       });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.detail || "Не удалось добавить исключение.");
+      setNewExclusion("");
       await loadExclusions();
       load();
     } catch (requestError) {
@@ -678,13 +725,34 @@ export default function LoadedDataPage() {
           {dataset === "payments" && showExclusions && (
             <div className="exclusions-panel">
               <p>
-                Платежи этих контрагентов не считаются расхождением: они платят
-                по своей нумерации, а не по номеру нашего счёта в Bitrix.
+                Здесь контрагенты, которые <strong>всегда</strong> платят по своей
+                нумерации, а не по номеру нашего счёта в Битриксе — например
+                маркетплейсы. Все их платежи, включая будущие, перестают
+                проверяться. Для разового случая лучше пометить платёж кнопкой
+                «нет в Битрикс» в самой строке.
               </p>
+              <div className="exclusions-add">
+                <input
+                  aria-label="Название контрагента для исключения"
+                  type="search"
+                  value={newExclusion}
+                  placeholder="Название контрагента"
+                  onChange={(event) => setNewExclusion(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") excludeCounterparty(newExclusion);
+                  }}
+                />
+                <button
+                  className="link-button"
+                  type="button"
+                  disabled={!newExclusion.trim() || excludingCounterparty !== null}
+                  onClick={() => excludeCounterparty(newExclusion)}
+                >
+                  {excludingCounterparty ? "добавляем…" : "добавить"}
+                </button>
+              </div>
               {exclusions.length === 0 ? (
-                <p className="exclusions-empty">
-                  Пока пусто. Нажмите «исключить» в строке платежа, чтобы добавить.
-                </p>
+                <p className="exclusions-empty">Пока пусто.</p>
               ) : (
                 <ul>
                   {exclusions.map((exclusion) => (
@@ -746,13 +814,27 @@ export default function LoadedDataPage() {
                   </tr>
                   <tr className="deals-filter-row">
                     <th>
-                      <input
-                        aria-label="Поиск по дате"
-                        type="search"
-                        value={paymentColumnFilters.paymentDate}
-                        placeholder="ГГГГ-ММ-ДД"
-                        onChange={(event) => updatePaymentColumnFilter("paymentDate", event.target.value)}
-                      />
+                      <span className="date-filter-box">
+                        <input
+                          aria-label="Поиск по дате или периоду"
+                          className="date-filter"
+                          value={paymentColumnFilters.paymentDate}
+                          placeholder="дата / период"
+                          title={DATE_FILTER_HINT}
+                          onChange={(event) => updatePaymentColumnFilter("paymentDate", event.target.value)}
+                        />
+                        {paymentColumnFilters.paymentDate && (
+                          <button
+                            className="filter-clear"
+                            type="button"
+                            aria-label="Очистить фильтр по дате"
+                            onMouseDown={(event) => event.preventDefault()}
+                            onClick={() => updatePaymentColumnFilter("paymentDate", "")}
+                          >
+                            ×
+                          </button>
+                        )}
+                      </span>
                     </th>
                     <th>
                       <input
@@ -898,18 +980,31 @@ export default function LoadedDataPage() {
                           <span className="bitrix-excluded" title={item.bitrix_exclusion_note ?? undefined}>
                             свой канал
                           </span>
+                        ) : item.bitrix_skipped ? (
+                          <span className="bitrix-excluded">нет в Битрикс</span>
                         ) : (
                           <strong>{item.bitrix_invoice_id ?? "—"}</strong>
                         )}
-                        {item.bitrix_mismatch && item.raw_counterparty && (
+                        {item.bitrix_mismatch && (
                           <button
                             className="exclude-button"
                             type="button"
-                            disabled={excludingCounterparty === item.raw_counterparty}
-                            onClick={() => excludeCounterparty(item.raw_counterparty!)}
-                            title="Больше не считать расхождением платежи этого контрагента"
+                            disabled={savingSkipId === item.id}
+                            onClick={() => skipBitrixCheck(item.id)}
+                            title="Счёт существует, но он не из Битрикса — сверять не с чем. Только этот платёж."
                           >
-                            {excludingCounterparty === item.raw_counterparty ? "…" : "исключить"}
+                            {savingSkipId === item.id ? "…" : "нет в Битрикс"}
+                          </button>
+                        )}
+                        {item.bitrix_skipped && (
+                          <button
+                            className="exclude-button"
+                            type="button"
+                            disabled={savingSkipId === item.id}
+                            onClick={() => unskipBitrixCheck(item.id)}
+                            title="Вернуть платёж в проверку по Битриксу"
+                          >
+                            вернуть в проверку
                           </button>
                         )}
                       </td>
@@ -980,13 +1075,27 @@ export default function LoadedDataPage() {
                       />
                     </th>
                     <th>
-                      <input
-                        aria-label="Поиск по дате документа"
-                        type="search"
-                        value={dealColumnFilters.openedOn}
-                        placeholder="ГГГГ-ММ-ДД"
-                        onChange={(event) => updateDealColumnFilter("openedOn", event.target.value)}
-                      />
+                      <span className="date-filter-box">
+                        <input
+                          aria-label="Поиск по дате документа или периоду"
+                          className="date-filter"
+                          value={dealColumnFilters.openedOn}
+                          placeholder="дата / период"
+                          title={DATE_FILTER_HINT}
+                          onChange={(event) => updateDealColumnFilter("openedOn", event.target.value)}
+                        />
+                        {dealColumnFilters.openedOn && (
+                          <button
+                            className="filter-clear"
+                            type="button"
+                            aria-label="Очистить фильтр по дате документа"
+                            onMouseDown={(event) => event.preventDefault()}
+                            onClick={() => updateDealColumnFilter("openedOn", "")}
+                          >
+                            ×
+                          </button>
+                        )}
+                      </span>
                     </th>
                     <th>
                       <input

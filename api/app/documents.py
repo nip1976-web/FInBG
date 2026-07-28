@@ -17,8 +17,10 @@ import re
 # (that would jump into a date) nor a comma/semicolon (that would jump into the
 # next clause and pick up a contract number).
 _FILLER = r"[^\d\n,;]{0,25}?"
-# Refuse a number that is really the day of a date: "по счёту от 29.06.2026".
-_NOT_A_DATE = r"(?!\.\d)"
+# Refuse a number that is only the first part of something longer: the day of a
+# date ("по счёту от 29.06.2026") or a composite document number that Bitrix
+# never issues ("по счету 29/09/7" — grabbing 29 there hits an unrelated invoice).
+_NOT_A_DATE = r"(?![./]\d)"
 
 # "сч-ф", "сч/ф" and "счф" are счёт-фактура — a tax document, never a payable
 # invoice, and never present in Bitrix.

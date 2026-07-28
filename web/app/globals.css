@@ -640,6 +640,20 @@ td .progress + small { display: inline; }
 .exclusions-panel li strong { display: block; font-size: 11px; }
 .exclusions-panel li small { display: block; margin-top: 2px; color: var(--muted); font-size: 9px; }
 .exclusions-empty { margin-bottom: 0 !important; }
+.exclusions-add { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.exclusions-add input {
+  width: min(280px, 60%);
+  height: 30px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--foreground);
+  font: inherit;
+  font-size: 11px;
+}
+.exclusions-add button:disabled { cursor: default; opacity: .45; }
+.exclusions-panel p strong { color: var(--foreground); }
 .payments-table { min-width: 1050px; width: 100%; table-layout: fixed; }
 .payments-table th:nth-child(1),
 .payments-table td:nth-child(1) { width: 7%; min-width: 0; white-space: nowrap; }
@@ -714,6 +728,47 @@ td .progress + small { display: inline; }
   font-size: 9px;
 }
 .deals-filter-row input::placeholder { color: var(--muted); }
+/* A period ("010326-150326") is twice as long as the column is wide, so the
+   date box grows sideways over its neighbour while it is in use. It stays on
+   the filter row rather than dropping over the first data row. */
+.deals-filter-row th { position: relative; }
+/* The header cells are sticky, so each one is its own stacking context: a
+   z-index on the expanded box only orders it within its own cell, and the
+   neighbouring column still paints over it. The cell itself has to be lifted. */
+.deals-filter-row th:has(.date-filter-box:focus-within) { z-index: 6; }
+.date-filter-box { display: block; position: static; }
+/* Widening on hover would slide the clear button out from under the cursor
+   just as you reach for it, so the box only grows once it actually has focus. */
+.date-filter-box:focus-within {
+  position: absolute;
+  z-index: 5;
+  top: 5px;
+  left: 4px;
+  width: 210px;
+}
+.date-filter-box input { width: 100%; padding-right: 22px; }
+.date-filter-box:focus-within input {
+  font-size: 11px;
+  border-color: var(--green);
+  background: var(--surface);
+  box-shadow: 0 3px 10px rgba(23, 33, 28, .16);
+}
+.filter-clear {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  /* Without an explicit layer the input paints over the button and swallows
+     the click, which looks exactly like a missing button. */
+  z-index: 2;
+  transform: translateY(-50%);
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1;
+}
+.filter-clear:hover { color: var(--red); }
 .deals-table td small { margin-top: 2px; }
 .deals-table td:nth-child(1) { width: 17%; min-width: 0; }
 .deals-table td:nth-child(2) { width: 11%; min-width: 0; }

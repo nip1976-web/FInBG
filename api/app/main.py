@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from psycopg.rows import dict_row
 
+from .dates import parse_date_query
 from .documents import extract_document_reference, is_bitrix_mismatch
 
 
@@ -303,7 +304,7 @@ def loaded_data_summary() -> dict:
 def loaded_payments(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=10, le=100),
-    payment_date: str | None = Query(default=None, max_length=20),
+    payment_date: str | None = Query(default=None, max_length=50),
     counterparty: str | None = Query(default=None, max_length=200),
     description: str | None = Query(default=None, max_length=200),
     document_number: str | None = Query(default=None, max_length=100),
@@ -320,8 +321,13 @@ def loaded_payments(
     ]
     params: list[object] = []
 
+    # "10.03.2026", "03.2026" or "10.03.2026-15.03.2026" — see app/dates.
+    payment_period = parse_date_query(payment_date)
+    if payment_period:
+        conditions.append("p.payment_date between %s and %s")
+        params.extend(payment_period)
+
     column_text_filters = [
-        ("cast(p.payment_date as text)", payment_date),
         ("p.raw_counterparty", counterparty),
         ("p.description", description),
         # The date is derived from the description at read time (see
@@ -421,6 +427,7 @@ def loaded_payments(
             bitrix_assignment.bitrix_invoice_id,
             override.document_kind as override_kind,
             override.document_number as override_number,
+            (skip.payment_id is not null) as bitrix_skipped,
             exclusion.note as bitrix_exclusion_note,
             coalesce(
                 bitrix_employee.full_name,
@@ -431,6 +438,8 @@ def loaded_payments(
         join financial_accounts a on a.id = p.account_id
         left join payment_document_overrides override
           on override.payment_id = p.id
+        left join payment_bitrix_skips skip
+          on skip.payment_id = p.id
         left join lateral (
             -- Plain substring match, not LIKE: the pattern is user-managed and
             -- a stray wildcard would silently exclude every counterparty.
@@ -480,6 +489,7 @@ def loaded_payments(
             "bitrix_excluded": excluded,
             "bitrix_mismatch": (
                 not excluded
+                and not row["bitrix_skipped"]
                 and is_bitrix_mismatch(kind, number, row["bitrix_invoice_id"])
             ),
         }
@@ -562,6 +572,34 @@ def clear_payment_document(payment_id: int) -> dict:
             [payment_id],
         )
     return {"payment_id": payment_id, "document_is_manual": False}
+
+
+@app.post("/api/data/payments/{payment_id}/bitrix-skip")
+def skip_bitrix_check(payment_id: int) -> dict:
+    with database() as connection:
+        payment = connection.execute(
+            "select id from payments where id = %s", [payment_id]
+        ).fetchone()
+        if payment is None:
+            raise HTTPException(status_code=404, detail="Платёж не найден.")
+        connection.execute(
+            """
+            insert into payment_bitrix_skips (payment_id)
+            values (%s)
+            on conflict (payment_id) do nothing
+            """,
+            [payment_id],
+        )
+    return {"payment_id": payment_id, "bitrix_skipped": True}
+
+
+@app.delete("/api/data/payments/{payment_id}/bitrix-skip")
+def unskip_bitrix_check(payment_id: int) -> dict:
+    with database() as connection:
+        connection.execute(
+            "delete from payment_bitrix_skips where payment_id = %s", [payment_id]
+        )
+    return {"payment_id": payment_id, "bitrix_skipped": False}
 
 
 @app.get("/api/data/bitrix-exclusions")
@@ -700,7 +738,7 @@ def loaded_deals(
     document_type: str | None = Query(default=None, max_length=100),
     document_number: str | None = Query(default=None, max_length=100),
     manager: str | None = Query(default=None, max_length=200),
-    opened_on: str | None = Query(default=None, max_length=20),
+    opened_on: str | None = Query(default=None, max_length=50),
     planned_revenue_rub: str | None = Query(default=None, max_length=50),
     paid_amount_rub: str | None = Query(default=None, max_length=50),
     balance_rub: str | None = Query(default=None, max_length=50),
@@ -730,12 +768,17 @@ def loaded_deals(
             """
         )
         params.extend([term, term, term, term])
+    # "10.03.2026", "03.2026" or "10.03.2026-15.03.2026" — see app/dates.
+    opened_period = parse_date_query(opened_on)
+    if opened_period:
+        conditions.append("d.opened_on between %s and %s")
+        params.extend(opened_period)
+
     column_text_filters = [
         ("c.name", customer),
         ("e.full_name", manager),
         ("d.original_document_type", document_type),
         ("d.original_document_number", document_number),
-        ("cast(d.opened_on as text)", opened_on),
     ]
     for expression, value in column_text_filters:
         if value and value.strip():

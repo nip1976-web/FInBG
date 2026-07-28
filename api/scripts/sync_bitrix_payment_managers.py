@@ -18,6 +18,7 @@ from psycopg.rows import dict_row
 # holds `app` isn't on sys.path yet.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from app.counterparties import same_company  # noqa: E402
 from app.documents import as_invoice_number, invoice_numbers  # noqa: E402
 
 # Bitrix throttles webhooks to ~2 req/s; batch invoice lookups so a run over
@@ -80,17 +81,38 @@ def bitrix_call(base: str, method: str, params: dict | None = None) -> dict:
     return result.get("result", {})
 
 
+def fetch_company_names(webhook: str, company_ids: list[int]) -> dict[int, str]:
+    """Resolve Bitrix company ids to titles, so an invoice can be checked
+    against the payer instead of being trusted on its number alone."""
+    names: dict[int, str] = {}
+    unique = sorted({cid for cid in company_ids if cid})
+    for start in range(0, len(unique), INVOICE_BATCH_SIZE):
+        chunk = unique[start : start + INVOICE_BATCH_SIZE]
+        try:
+            result = bitrix_call(
+                webhook,
+                "crm.company.list",
+                {"filter": {"@ID": chunk}, "select": ["ID", "TITLE"]},
+            )
+        except BitrixCallError as error:
+            print(f"bitrix company batch failed: {error}", file=sys.stderr)
+            continue
+        for item in result if isinstance(result, list) else result.get("items", []):
+            names[int(item["ID"])] = item.get("TITLE") or ""
+    return names
+
+
 def fetch_invoice_managers(
     webhook: str, numbers: list[int]
-) -> tuple[dict[int, int], list[int]]:
-    """Return {invoice_id: assigned_by_id} for a batch of invoice numbers.
+) -> tuple[dict[int, dict], list[int]]:
+    """Return {invoice_id: {assigned_by, company_id}} for a batch of numbers.
 
     Numbers Bitrix doesn't recognise are silently absent from the result
     (that's a legitimate "no such invoice", not an error). Real failures
     (network, throttling, 5xx) are collected and returned so the caller can
     tell them apart from "not found" instead of treating both the same way.
     """
-    assigned_by: dict[int, int] = {}
+    assigned_by: dict[int, dict] = {}
     failed_batches: list[int] = []
     unique = sorted(set(numbers))
     for start in range(0, len(unique), INVOICE_BATCH_SIZE):
@@ -102,7 +124,7 @@ def fetch_invoice_managers(
                 {
                     "entityTypeId": 31,
                     "filter": {"@id": chunk},
-                    "select": ["id", "assignedById"],
+                    "select": ["id", "assignedById", "companyId"],
                 },
             )
         except BitrixCallError as error:
@@ -111,7 +133,10 @@ def fetch_invoice_managers(
             continue
         for item in result.get("items", []):
             if item.get("assignedById"):
-                assigned_by[int(item["id"])] = int(item["assignedById"])
+                assigned_by[int(item["id"])] = {
+                    "assigned_by": int(item["assignedById"]),
+                    "company_id": int(item["companyId"]) if item.get("companyId") else None,
+                }
     return assigned_by, failed_batches
 
 
@@ -136,6 +161,7 @@ def main() -> None:
             select
                 p.id,
                 p.description,
+                p.raw_counterparty,
                 override.document_kind as override_kind,
                 override.document_number as override_number
             from payments p
@@ -159,6 +185,13 @@ def main() -> None:
                       lower(coalesce(p.raw_counterparty, '')),
                       lower(ex.counterparty_pattern)
                   ) > 0
+              )
+              -- Individually marked as "no such invoice in Bitrix" (issued by
+              -- hand, predates Bitrix, ...).
+              and not exists (
+                  select 1
+                  from payment_bitrix_skips skip
+                  where skip.payment_id = p.id
               )
             order by p.id
             """
@@ -199,23 +232,48 @@ def main() -> None:
         all_numbers = [n for numbers in payment_numbers.values() for n in numbers]
         assigned_by, failed_numbers = fetch_invoice_managers(webhook, all_numbers)
         failed_set = set(failed_numbers)
+        company_names = fetch_company_names(
+            webhook, [meta["company_id"] for meta in assigned_by.values()]
+        )
+        # Pairings a human already vouched for, where the two spellings are too
+        # far apart for any automatic comparison.
+        confirmed_links = {
+            (row["payer_name"].strip().lower(), row["bitrix_company_id"])
+            for row in connection.execute(
+                "select payer_name, bitrix_company_id from bitrix_company_links"
+            ).fetchall()
+        }
+
+        def payer_matches(payment: dict, meta: dict) -> bool:
+            payer = (payment["raw_counterparty"] or "").strip()
+            if (payer.lower(), meta["company_id"]) in confirmed_links:
+                return True
+            return same_company(payer, company_names.get(meta["company_id"] or -1, ""))
 
         matched: list[tuple[dict, int, int, dict]] = []
         not_found = 0
         ambiguous = 0
         lookup_errors = 0
+        wrong_counterparty = 0
         user_cache: dict[int, dict] = {}
         for payment in payments:
             numbers = payment_numbers[payment["id"]]
             if any(number in failed_set for number in numbers):
                 lookup_errors += 1
                 continue
-            candidates = [
-                (number, assigned_by[number]) for number in numbers if number in assigned_by
-            ]
-            managers = {manager_id for _, manager_id in candidates}
+            found = [(number, assigned_by[number]) for number in numbers if number in assigned_by]
+            # An invoice number alone proves nothing: anyone along the chain can
+            # mistype it, and the number that results belongs to whichever
+            # client happens to own it. Only trust it when Bitrix says that
+            # invoice was issued to the company that actually paid.
+            candidates = [(number, meta) for number, meta in found if payer_matches(payment, meta)]
+            if found and not candidates:
+                wrong_counterparty += 1
+                continue
+            managers = {meta["assigned_by"] for _, meta in candidates}
             if len(managers) == 1 and candidates:
-                number, bitrix_user_id = candidates[0]
+                number, meta = candidates[0]
+                bitrix_user_id = meta["assigned_by"]
                 if bitrix_user_id not in user_cache:
                     try:
                         users = bitrix_call(webhook, "user.get", {"ID": bitrix_user_id})
@@ -301,6 +359,7 @@ def main() -> None:
                     "document_not_found": not_found,
                     "ambiguous_manager": ambiguous,
                     "lookup_errors": lookup_errors,
+                    "wrong_counterparty": wrong_counterparty,
                     "excluded_counterparties": excluded_payments,
                 },
                 ensure_ascii=False,
