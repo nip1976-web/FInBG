@@ -18,6 +18,17 @@ type DealColumnFilters = {
   balanceRub: string;
   balanceEur: string;
 };
+type PaymentColumnFilters = {
+  paymentDate: string;
+  counterparty: string;
+  description: string;
+  documentNumber: string;
+  documentDate: string;
+  bitrixInvoiceId: string;
+  manager: string;
+  source: string;
+  amount: string;
+};
 
 type Payment = {
   id: number;
@@ -31,6 +42,22 @@ type Payment = {
   is_internal_transfer: boolean;
   account_name: string;
   manager_name: string | null;
+  document_kind: DocumentKind | null;
+  document_number: string | null;
+  document_date: string | null;
+  document_is_manual: boolean;
+  bitrix_invoice_id: number | null;
+  bitrix_excluded: boolean;
+  bitrix_exclusion_note: string | null;
+  bitrix_mismatch: boolean;
+};
+
+type DocumentKind = "invoice" | "spec";
+
+type BitrixExclusion = {
+  id: number;
+  counterparty_pattern: string;
+  note: string | null;
 };
 
 type Deal = {
@@ -146,6 +173,23 @@ export default function LoadedDataPage() {
     balanceRub: "",
     balanceEur: "",
   });
+  const [paymentColumnFilters, setPaymentColumnFilters] = useState<PaymentColumnFilters>({
+    paymentDate: "",
+    counterparty: "",
+    description: "",
+    documentNumber: "",
+    documentDate: "",
+    bitrixInvoiceId: "",
+    manager: "",
+    source: "",
+    amount: "",
+  });
+  const [onlyBitrixMismatch, setOnlyBitrixMismatch] = useState(false);
+  const [documentDrafts, setDocumentDrafts] = useState<Record<number, string>>({});
+  const [savingDocumentId, setSavingDocumentId] = useState<number | null>(null);
+  const [exclusions, setExclusions] = useState<BitrixExclusion[]>([]);
+  const [excludingCounterparty, setExcludingCounterparty] = useState<string | null>(null);
+  const [showExclusions, setShowExclusions] = useState(false);
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
@@ -178,6 +222,23 @@ export default function LoadedDataPage() {
       }
       if (dataset === "deals" && dealFilter === "unmatched") {
         params.set("without_match", "true");
+      }
+      if (dataset === "payments") {
+        const paymentParams = {
+          payment_date: paymentColumnFilters.paymentDate,
+          counterparty: paymentColumnFilters.counterparty,
+          description: paymentColumnFilters.description,
+          document_number: paymentColumnFilters.documentNumber,
+          document_date: paymentColumnFilters.documentDate,
+          bitrix_invoice_id: paymentColumnFilters.bitrixInvoiceId,
+          manager: paymentColumnFilters.manager,
+          source: paymentColumnFilters.source,
+          amount_rub: paymentColumnFilters.amount,
+        };
+        Object.entries(paymentParams).forEach(([key, value]) => {
+          if (value.trim()) params.set(key, value.trim());
+        });
+        if (onlyBitrixMismatch) params.set("only_bitrix_mismatch", "true");
       }
       if (dataset === "deals") {
         const dealParams = {
@@ -217,7 +278,18 @@ export default function LoadedDataPage() {
     } finally {
       if (loadAbortRef.current === controller) setLoading(false);
     }
-  }, [dataset, dealFilter, dealColumnFilters, eurRate, page, search]);
+  }, [dataset, dealFilter, dealColumnFilters, paymentColumnFilters, onlyBitrixMismatch, eurRate, page, search]);
+
+  const loadExclusions = useCallback(async () => {
+    try {
+      const response = await fetch(`${API_URL}/api/data/bitrix-exclusions`);
+      if (!response.ok) throw new Error("Не удалось получить список исключений");
+      const payload = await response.json();
+      setExclusions(payload.items);
+    } catch (requestError) {
+      setError((requestError as Error).message);
+    }
+  }, []);
 
   useEffect(() => {
     const timeout = setTimeout(() => {
@@ -232,6 +304,10 @@ export default function LoadedDataPage() {
       .then((payload) => setEurRate(payload))
       .catch(() => setEurRate(null));
   }, []);
+
+  useEffect(() => {
+    if (dataset === "payments") loadExclusions();
+  }, [dataset, loadExclusions]);
 
   const current = dataset === "payments" ? payments : dataset === "deals" ? deals : aliases;
   const selectedDeal = deals?.items.find((item) => item.id === selectedDealId);
@@ -255,6 +331,18 @@ export default function LoadedDataPage() {
       balanceRub: "",
       balanceEur: "",
     });
+    setPaymentColumnFilters({
+      paymentDate: "",
+      counterparty: "",
+      description: "",
+      documentNumber: "",
+      documentDate: "",
+      bitrixInvoiceId: "",
+      manager: "",
+      source: "",
+      amount: "",
+    });
+    setOnlyBitrixMismatch(false);
     setSelectedDealId(null);
   };
 
@@ -265,6 +353,121 @@ export default function LoadedDataPage() {
     setDealColumnFilters((current) => ({ ...current, [key]: value }));
     setPage(1);
     setSelectedDealId(null);
+  };
+
+  const updatePaymentColumnFilter = (
+    key: keyof PaymentColumnFilters,
+    value: string
+  ) => {
+    setPaymentColumnFilters((current) => ({ ...current, [key]: value }));
+    setPage(1);
+  };
+
+  const saveDocument = async (
+    item: Payment,
+    kind: DocumentKind | null,
+    number: string | null
+  ) => {
+    const trimmed = (number ?? "").trim();
+    setSavingDocumentId(item.id);
+    setError("");
+    try {
+      // Clearing either field means "stop overriding" — fall back to whatever
+      // the description parses to.
+      const response = !kind || !trimmed
+        ? await fetch(`${API_URL}/api/data/payments/${item.id}/document`, {
+            method: "DELETE",
+          })
+        : await fetch(`${API_URL}/api/data/payments/${item.id}/document`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ document_kind: kind, document_number: trimmed }),
+          });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.detail || "Не удалось сохранить номер документа.");
+      }
+      setDocumentDrafts((current) => {
+        const next = { ...current };
+        delete next[item.id];
+        return next;
+      });
+      load();
+    } catch (requestError) {
+      setError((requestError as Error).message);
+    } finally {
+      setSavingDocumentId(null);
+    }
+  };
+
+  const commitDocumentDraft = (item: Payment) => {
+    const draft = documentDrafts[item.id];
+    if (draft === undefined) return;
+    if (draft.trim() === (item.document_number ?? "")) {
+      setDocumentDrafts((current) => {
+        const next = { ...current };
+        delete next[item.id];
+        return next;
+      });
+      return;
+    }
+    // A number typed into an unclassified row is a счёт unless said otherwise.
+    saveDocument(item, item.document_kind ?? "invoice", draft);
+  };
+
+  const clearDocument = async (paymentId: number) => {
+    setSavingDocumentId(paymentId);
+    setError("");
+    try {
+      const response = await fetch(`${API_URL}/api/data/payments/${paymentId}/document`, {
+        method: "DELETE",
+      });
+      if (!response.ok) throw new Error("Не удалось вернуть распознанный номер.");
+      setDocumentDrafts((current) => {
+        const next = { ...current };
+        delete next[paymentId];
+        return next;
+      });
+      load();
+    } catch (requestError) {
+      setError((requestError as Error).message);
+    } finally {
+      setSavingDocumentId(null);
+    }
+  };
+
+  const excludeCounterparty = async (counterparty: string) => {
+    setExcludingCounterparty(counterparty);
+    setError("");
+    try {
+      const response = await fetch(`${API_URL}/api/data/bitrix-exclusions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ counterparty_pattern: counterparty }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.detail || "Не удалось добавить исключение.");
+      await loadExclusions();
+      load();
+    } catch (requestError) {
+      setError((requestError as Error).message);
+    } finally {
+      setExcludingCounterparty(null);
+    }
+  };
+
+  const removeExclusion = async (exclusionId: number) => {
+    setError("");
+    try {
+      const response = await fetch(`${API_URL}/api/data/bitrix-exclusions/${exclusionId}`, {
+        method: "DELETE",
+      });
+      if (!response.ok) throw new Error("Не удалось удалить исключение.");
+      await loadExclusions();
+      load();
+    } catch (requestError) {
+      setError((requestError as Error).message);
+    }
   };
 
   const loadCandidatePayments = async (dealId: number) => {
@@ -445,25 +648,80 @@ export default function LoadedDataPage() {
                 </span>
               </div>
             )}
+            {dataset === "payments" && (
+              <div className="payments-header-tools">
+                <label className="mismatch-toggle">
+                  <input
+                    type="checkbox"
+                    checked={onlyBitrixMismatch}
+                    onChange={(event) => {
+                      setOnlyBitrixMismatch(event.target.checked);
+                      setPage(1);
+                    }}
+                  />
+                  Только расхождения со счётом Bitrix
+                </label>
+                <button
+                  className="link-button"
+                  type="button"
+                  onClick={() => setShowExclusions((value) => !value)}
+                >
+                  Исключения ({exclusions.length})
+                </button>
+                <span className="dataset-count">
+                  Найдено: <strong>{current?.total ?? 0}</strong>
+                </span>
+              </div>
+            )}
           </div>
 
-          {dataset !== "deals" && (
+          {dataset === "payments" && showExclusions && (
+            <div className="exclusions-panel">
+              <p>
+                Платежи этих контрагентов не считаются расхождением: они платят
+                по своей нумерации, а не по номеру нашего счёта в Bitrix.
+              </p>
+              {exclusions.length === 0 ? (
+                <p className="exclusions-empty">
+                  Пока пусто. Нажмите «исключить» в строке платежа, чтобы добавить.
+                </p>
+              ) : (
+                <ul>
+                  {exclusions.map((exclusion) => (
+                    <li key={exclusion.id}>
+                      <div>
+                        <strong>{exclusion.counterparty_pattern}</strong>
+                        {exclusion.note && <small>{exclusion.note}</small>}
+                      </div>
+                      <button
+                        className="link-button"
+                        type="button"
+                        onClick={() => removeExclusion(exclusion.id)}
+                      >
+                        удалить
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+
+          {dataset === "aliases" && (
             <div className="loaded-toolbar">
               <label>
                 <span>Поиск</span>
                 <input
                   type="search"
                   value={search}
-                  placeholder={dataset === "payments"
-                    ? "Контрагент или описание…"
-                    : "Название плательщика или клиента…"}
+                  placeholder="Название плательщика или клиента…"
                   onChange={(event) => {
                     setSearch(event.target.value);
                     setPage(1);
                   }}
                 />
               </label>
-              <span>{dataset === "aliases" ? "Предложено" : "Найдено"}: <strong>{current?.total ?? 0}</strong></span>
+              <span>Предложено: <strong>{current?.total ?? 0}</strong></span>
             </div>
           )}
 
@@ -475,25 +733,189 @@ export default function LoadedDataPage() {
                 <thead>
                   <tr>
                     <th>Дата</th>
-                    <th>Контрагент и описание</th>
+                    <th>Контрагент</th>
+                    <th>Описание</th>
+                    <th>Вид</th>
+                    <th>Счёт / спецификация</th>
+                    <th>Дата документа</th>
+                    <th>Номер счёта Bitrix</th>
                     <th>Менеджер</th>
-                    <th>Счёт / источник</th>
+                    <th>Источник</th>
                     <th>Сумма</th>
                     <th>Тип</th>
                   </tr>
+                  <tr className="deals-filter-row">
+                    <th>
+                      <input
+                        aria-label="Поиск по дате"
+                        type="search"
+                        value={paymentColumnFilters.paymentDate}
+                        placeholder="ГГГГ-ММ-ДД"
+                        onChange={(event) => updatePaymentColumnFilter("paymentDate", event.target.value)}
+                      />
+                    </th>
+                    <th>
+                      <input
+                        aria-label="Поиск по контрагенту"
+                        type="search"
+                        value={paymentColumnFilters.counterparty}
+                        placeholder="Контрагент"
+                        onChange={(event) => updatePaymentColumnFilter("counterparty", event.target.value)}
+                      />
+                    </th>
+                    <th>
+                      <input
+                        aria-label="Поиск по описанию"
+                        type="search"
+                        value={paymentColumnFilters.description}
+                        placeholder="Описание"
+                        onChange={(event) => updatePaymentColumnFilter("description", event.target.value)}
+                      />
+                    </th>
+                    <th></th>
+                    <th>
+                      <input
+                        aria-label="Поиск по номеру счёта или спецификации"
+                        type="search"
+                        value={paymentColumnFilters.documentNumber}
+                        placeholder="Номер"
+                        onChange={(event) => updatePaymentColumnFilter("documentNumber", event.target.value)}
+                      />
+                    </th>
+                    <th>
+                      <input
+                        aria-label="Поиск по дате документа"
+                        type="search"
+                        value={paymentColumnFilters.documentDate}
+                        placeholder="ДД.ММ.ГГГГ"
+                        onChange={(event) => updatePaymentColumnFilter("documentDate", event.target.value)}
+                      />
+                    </th>
+                    <th>
+                      <input
+                        aria-label="Поиск по номеру счёта Bitrix"
+                        inputMode="numeric"
+                        value={paymentColumnFilters.bitrixInvoiceId}
+                        placeholder="Номер"
+                        onChange={(event) => updatePaymentColumnFilter("bitrixInvoiceId", event.target.value)}
+                      />
+                    </th>
+                    <th>
+                      <input
+                        aria-label="Поиск по менеджеру"
+                        type="search"
+                        value={paymentColumnFilters.manager}
+                        placeholder="Менеджер"
+                        onChange={(event) => updatePaymentColumnFilter("manager", event.target.value)}
+                      />
+                    </th>
+                    <th>
+                      <input
+                        aria-label="Поиск по источнику"
+                        type="search"
+                        value={paymentColumnFilters.source}
+                        placeholder="Источник"
+                        onChange={(event) => updatePaymentColumnFilter("source", event.target.value)}
+                      />
+                    </th>
+                    <th>
+                      <input
+                        aria-label="Поиск по сумме"
+                        inputMode="decimal"
+                        value={paymentColumnFilters.amount}
+                        placeholder="Сумма"
+                        onChange={(event) => updatePaymentColumnFilter("amount", event.target.value)}
+                      />
+                    </th>
+                    <th></th>
+                  </tr>
                 </thead>
                 <tbody>
-                  {loading && <tr><td colSpan={6} className="review-empty">Загрузка…</td></tr>}
+                  {loading && <tr><td colSpan={11} className="review-empty">Загрузка…</td></tr>}
                   {!loading && payments?.items.map((item) => (
                     <tr key={item.id}>
-                      <td><strong>{date(item.payment_date)}</strong></td>
+                      <td>{date(item.payment_date)}</td>
                       <td className="loaded-description">
                         <strong>{item.raw_counterparty || "Не указан"}</strong>
-                        <small>{item.description || "Без пояснения"}</small>
+                      </td>
+                      <td>{item.description || "Без пояснения"}</td>
+                      <td>
+                        <select
+                          aria-label="Вид документа"
+                          className="document-kind"
+                          value={item.document_kind ?? ""}
+                          onChange={(event) =>
+                            saveDocument(
+                              item,
+                              (event.target.value || null) as DocumentKind | null,
+                              item.document_number
+                            )
+                          }
+                        >
+                          <option value="">—</option>
+                          <option value="invoice">Сч</option>
+                          <option value="spec">Сп</option>
+                        </select>
+                      </td>
+                      <td className={item.document_is_manual ? "document-number manual" : "document-number"}>
+                        <input
+                          aria-label="Номер счёта или спецификации"
+                          value={documentDrafts[item.id] ?? item.document_number ?? ""}
+                          placeholder="—"
+                          disabled={savingDocumentId === item.id}
+                          onChange={(event) =>
+                            setDocumentDrafts((current) => ({
+                              ...current,
+                              [item.id]: event.target.value,
+                            }))
+                          }
+                          onBlur={() => commitDocumentDraft(item)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter") event.currentTarget.blur();
+                            if (event.key === "Escape") {
+                              setDocumentDrafts((current) => {
+                                const next = { ...current };
+                                delete next[item.id];
+                                return next;
+                              });
+                            }
+                          }}
+                        />
+                        {item.document_is_manual && (
+                          <button
+                            className="exclude-button"
+                            type="button"
+                            onClick={() => clearDocument(item.id)}
+                            title="Вернуть номер, распознанный из описания платежа"
+                          >
+                            вернуть авто
+                          </button>
+                        )}
+                      </td>
+                      <td>{item.document_date || "—"}</td>
+                      <td className={item.bitrix_mismatch ? "bitrix-mismatch" : undefined}>
+                        {item.bitrix_excluded ? (
+                          <span className="bitrix-excluded" title={item.bitrix_exclusion_note ?? undefined}>
+                            свой канал
+                          </span>
+                        ) : (
+                          <strong>{item.bitrix_invoice_id ?? "—"}</strong>
+                        )}
+                        {item.bitrix_mismatch && item.raw_counterparty && (
+                          <button
+                            className="exclude-button"
+                            type="button"
+                            disabled={excludingCounterparty === item.raw_counterparty}
+                            onClick={() => excludeCounterparty(item.raw_counterparty!)}
+                            title="Больше не считать расхождением платежи этого контрагента"
+                          >
+                            {excludingCounterparty === item.raw_counterparty ? "…" : "исключить"}
+                          </button>
+                        )}
                       </td>
                       <td>{item.manager_name || "—"}</td>
                       <td>
-                        <strong>{item.account_name}</strong>
+                        {item.account_name}
                         <small>{item.source_sheet}, строка {item.source_row}</small>
                       </td>
                       <td className="amount-inflow"><strong>+{rub(item.amount_rub)}</strong></td>
@@ -695,13 +1117,14 @@ export default function LoadedDataPage() {
               <div className="deal-payments-title">
                 <div>
                   <strong>Связанные платежи</strong>
-                  {selectedDeal && (
+                  {selectedDeal ? (
                     <span>{selectedDeal.deal_number} · {selectedDeal.customer_name} · менеджер: {selectedDeal.manager_name || "не указан"}</span>
+                  ) : (
+                    <span className="deal-payments-hint">Выберите сделку в таблице выше, чтобы увидеть связанные с ней платежи.</span>
                   )}
                 </div>
                 {selectedDeal && <span>{selectedDeal.title}</span>}
               </div>
-              {!selectedDeal && <p>Выберите сделку в таблице выше, чтобы увидеть связанные с ней платежи.</p>}
               {selectedDeal && (
                 <div className="candidate-payments">
                   <div className="candidate-payments-title">

@@ -9,8 +9,10 @@ from xml.etree import ElementTree
 import psycopg
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from psycopg.rows import dict_row
+
+from .documents import extract_document_reference, is_bitrix_mismatch
 
 
 DATABASE_URL = os.getenv("DATABASE_URL", "dbname=finbg")
@@ -52,6 +54,16 @@ class StagingOperationUpdate(BaseModel):
 class ManualPaymentAllocationCreate(BaseModel):
     payment_id: int
     allocated_amount_rub: Decimal
+
+
+class BitrixExclusionCreate(BaseModel):
+    counterparty_pattern: str = Field(max_length=200)
+    note: str | None = Field(default=None, max_length=500)
+
+
+class PaymentDocumentUpdate(BaseModel):
+    document_kind: Literal["invoice", "spec"]
+    document_number: str = Field(max_length=50)
 
 
 @contextmanager
@@ -291,106 +303,318 @@ def loaded_data_summary() -> dict:
 def loaded_payments(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=10, le=100),
-    search: str | None = Query(default=None, max_length=200),
+    payment_date: str | None = Query(default=None, max_length=20),
+    counterparty: str | None = Query(default=None, max_length=200),
+    description: str | None = Query(default=None, max_length=200),
+    document_number: str | None = Query(default=None, max_length=100),
+    document_date: str | None = Query(default=None, max_length=20),
+    bitrix_invoice_id: str | None = Query(default=None, max_length=20),
+    manager: str | None = Query(default=None, max_length=200),
+    source: str | None = Query(default=None, max_length=200),
+    amount_rub: str | None = Query(default=None, max_length=50),
+    only_bitrix_mismatch: bool = Query(default=False),
 ) -> dict:
     conditions = [
         "p.source = 'payment_battery'",
         "p.direction = 'inflow'",
     ]
     params: list[object] = []
-    if search and search.strip():
-        term = ilike_term(search.strip())
+
+    column_text_filters = [
+        ("cast(p.payment_date as text)", payment_date),
+        ("p.raw_counterparty", counterparty),
+        ("p.description", description),
+        # The date is derived from the description at read time (see
+        # extract_document_reference), so filtering the raw text is the
+        # equivalent of filtering the extracted value.
+        ("p.description", document_date),
+    ]
+    for expression, value in column_text_filters:
+        if value and value.strip():
+            conditions.append(f"coalesce({expression}, '') ilike %s")
+            params.append(ilike_term(value.strip()))
+
+    if document_number and document_number.strip():
+        # Normally parsed out of the description, but a manual correction
+        # replaces it, so the filter has to look at both.
+        term = ilike_term(document_number.strip())
         conditions.append(
             """
             (
-                p.raw_counterparty ilike %s
-                or p.description ilike %s
-                or p.source_sheet ilike %s
+                coalesce(p.description, '') ilike %s
                 or exists (
                     select 1
-                    from payment_allocations search_pa
-                    join deals search_d on search_d.id = search_pa.deal_id
-                    join employees search_e on search_e.id = search_d.manager_id
-                    where search_pa.payment_id = p.id
-                      and search_e.full_name ilike %s
-                )
-                or exists (
-                    select 1
-                    from payment_manager_assignments search_assignment
-                    where search_assignment.payment_id = p.id
-                      and search_assignment.manager_name ilike %s
+                    from payment_document_overrides filter_override
+                    where filter_override.payment_id = p.id
+                      and filter_override.document_number ilike %s
                 )
             )
             """
         )
-        params.extend([term, term, term, term, term])
+        params.extend([term, term])
+
+    if source and source.strip():
+        term = ilike_term(source.strip())
+        conditions.append("(a.name ilike %s or coalesce(p.source_sheet, '') ilike %s)")
+        params.extend([term, term])
+
+    if amount_rub and amount_rub.strip():
+        normalized = amount_rub.replace(" ", "").replace(",", ".").strip()
+        conditions.append("cast(p.amount_rub as text) ilike %s")
+        params.append(ilike_term(normalized))
+
+    if bitrix_invoice_id and bitrix_invoice_id.strip():
+        term = ilike_term(bitrix_invoice_id.strip())
+        conditions.append(
+            """
+            exists (
+                select 1
+                from payment_manager_assignments filter_bitrix_invoice
+                where filter_bitrix_invoice.payment_id = p.id
+                  and cast(filter_bitrix_invoice.bitrix_invoice_id as text) ilike %s
+            )
+            """
+        )
+        params.append(term)
+
+    if manager and manager.strip():
+        term = ilike_term(manager.strip())
+        conditions.append(
+            """
+            (
+                exists (
+                    select 1
+                    from payment_manager_assignments filter_assignment
+                    left join employees filter_bitrix_employee
+                      on filter_bitrix_employee.id = filter_assignment.manager_id
+                    where filter_assignment.payment_id = p.id
+                      and coalesce(filter_bitrix_employee.full_name, filter_assignment.manager_name) ilike %s
+                )
+                or exists (
+                    select 1
+                    from payment_allocations filter_pa
+                    join deals filter_d on filter_d.id = filter_pa.deal_id
+                    join employees filter_e on filter_e.id = filter_d.manager_id
+                    where filter_pa.payment_id = p.id
+                      and filter_e.full_name ilike %s
+                )
+            )
+            """
+        )
+        params.extend([term, term])
 
     where_sql = f"where {' and '.join(conditions)}"
     offset = (page - 1) * page_size
 
+    rows_sql = f"""
+        select
+            p.id,
+            p.payment_date,
+            p.raw_counterparty,
+            p.amount_rub,
+            p.description,
+            p.operation_type,
+            p.source_sheet,
+            p.source_row,
+            p.is_internal_transfer,
+            a.name as account_name,
+            bitrix_assignment.bitrix_invoice_id,
+            override.document_kind as override_kind,
+            override.document_number as override_number,
+            exclusion.note as bitrix_exclusion_note,
+            coalesce(
+                bitrix_employee.full_name,
+                bitrix_assignment.manager_name,
+                managers.manager_name
+            ) as manager_name
+        from payments p
+        join financial_accounts a on a.id = p.account_id
+        left join payment_document_overrides override
+          on override.payment_id = p.id
+        left join lateral (
+            -- Plain substring match, not LIKE: the pattern is user-managed and
+            -- a stray wildcard would silently exclude every counterparty.
+            select note
+            from bitrix_match_exclusions ex
+            where strpos(
+                lower(coalesce(p.raw_counterparty, '')),
+                lower(ex.counterparty_pattern)
+            ) > 0
+            order by length(ex.counterparty_pattern) desc
+            limit 1
+        ) exclusion on true
+        left join payment_manager_assignments bitrix_assignment
+          on bitrix_assignment.payment_id = p.id
+        left join employees bitrix_employee
+          on bitrix_employee.id = bitrix_assignment.manager_id
+        left join lateral (
+            select string_agg(
+                distinct e.full_name,
+                ', ' order by e.full_name
+            ) as manager_name
+            from payment_allocations pa
+            join deals d on d.id = pa.deal_id
+            join employees e on e.id = d.manager_id
+            where pa.payment_id = p.id
+        ) managers on true
+        {where_sql}
+        order by p.payment_date desc, p.id desc
+    """
+
+    def build_item(row: dict) -> dict:
+        parsed_kind, parsed_number, document_date = extract_document_reference(
+            row["description"]
+        )
+        is_manual = row["override_kind"] is not None
+        kind = row["override_kind"] if is_manual else parsed_kind
+        number = row["override_number"] if is_manual else parsed_number
+        excluded = row["bitrix_exclusion_note"] is not None
+        return {
+            **row,
+            "payment_date": row["payment_date"].isoformat(),
+            "amount_rub": money(row["amount_rub"]),
+            "document_kind": kind,
+            "document_number": number,
+            "document_date": document_date,
+            "document_is_manual": is_manual,
+            "bitrix_excluded": excluded,
+            "bitrix_mismatch": (
+                not excluded
+                and is_bitrix_mismatch(kind, number, row["bitrix_invoice_id"])
+            ),
+        }
+
     with database() as connection:
-        total = connection.execute(
-            f"""
-            select count(*) as total
-            from payments p
-            {where_sql}
-            """,
-            params,
-        ).fetchone()["total"]
-        rows = connection.execute(
-            f"""
-            select
-                p.id,
-                p.payment_date,
-                p.raw_counterparty,
-                p.amount_rub,
-                p.description,
-                p.operation_type,
-                p.source_sheet,
-                p.source_row,
-                p.is_internal_transfer,
-                a.name as account_name,
-                coalesce(
-                    bitrix_employee.full_name,
-                    bitrix_assignment.manager_name,
-                    managers.manager_name
-                ) as manager_name
-            from payments p
-            join financial_accounts a on a.id = p.account_id
-            left join payment_manager_assignments bitrix_assignment
-              on bitrix_assignment.payment_id = p.id
-            left join employees bitrix_employee
-              on bitrix_employee.id = bitrix_assignment.manager_id
-            left join lateral (
-                select string_agg(
-                    distinct e.full_name,
-                    ', ' order by e.full_name
-                ) as manager_name
-                from payment_allocations pa
-                join deals d on d.id = pa.deal_id
-                join employees e on e.id = d.manager_id
-                where pa.payment_id = p.id
-            ) managers on true
-            {where_sql}
-            order by p.payment_date desc, p.id desc
-            limit %s offset %s
-            """,
-            [*params, page_size, offset],
-        ).fetchall()
+        if only_bitrix_mismatch:
+            # The mismatch flag depends on extract_document_reference, which
+            # only exists once the description has been parsed in Python, so
+            # this path can't be filtered in SQL: pull every row matching the
+            # other filters (dataset is a few hundred rows at most) and
+            # paginate the already-computed items instead.
+            all_items = [
+                build_item(dict(row))
+                for row in connection.execute(rows_sql, params).fetchall()
+            ]
+            matching_items = [item for item in all_items if item["bitrix_mismatch"]]
+            total = len(matching_items)
+            items = matching_items[offset : offset + page_size]
+        else:
+            total = connection.execute(
+                f"""
+                select count(*) as total
+                from payments p
+                join financial_accounts a on a.id = p.account_id
+                {where_sql}
+                """,
+                params,
+            ).fetchone()["total"]
+            rows = connection.execute(
+                f"{rows_sql} limit %s offset %s",
+                [*params, page_size, offset],
+            ).fetchall()
+            items = [build_item(dict(row)) for row in rows]
 
     return {
         "page": page,
         "page_size": page_size,
         "total": total,
-        "items": [
-            {
-                **dict(row),
-                "payment_date": row["payment_date"].isoformat(),
-                "amount_rub": money(row["amount_rub"]),
-            }
-            for row in rows
-        ],
+        "items": items,
     }
+
+
+@app.put("/api/data/payments/{payment_id}/document")
+def set_payment_document(payment_id: int, payload: PaymentDocumentUpdate) -> dict:
+    number = payload.document_number.strip()
+    if not number:
+        raise HTTPException(status_code=422, detail="Укажите номер документа.")
+
+    with database() as connection:
+        payment = connection.execute(
+            "select id from payments where id = %s", [payment_id]
+        ).fetchone()
+        if payment is None:
+            raise HTTPException(status_code=404, detail="Платёж не найден.")
+        connection.execute(
+            """
+            insert into payment_document_overrides (
+                payment_id, document_kind, document_number
+            ) values (%s, %s, %s)
+            on conflict (payment_id) do update
+            set document_kind = excluded.document_kind,
+                document_number = excluded.document_number,
+                updated_at = now()
+            """,
+            [payment_id, payload.document_kind, number],
+        )
+    return {
+        "payment_id": payment_id,
+        "document_kind": payload.document_kind,
+        "document_number": number,
+        "document_is_manual": True,
+    }
+
+
+@app.delete("/api/data/payments/{payment_id}/document")
+def clear_payment_document(payment_id: int) -> dict:
+    with database() as connection:
+        connection.execute(
+            "delete from payment_document_overrides where payment_id = %s",
+            [payment_id],
+        )
+    return {"payment_id": payment_id, "document_is_manual": False}
+
+
+@app.get("/api/data/bitrix-exclusions")
+def bitrix_exclusions() -> dict:
+    with database() as connection:
+        rows = connection.execute(
+            """
+            select id, counterparty_pattern, note, created_at
+            from bitrix_match_exclusions
+            order by counterparty_pattern
+            """
+        ).fetchall()
+    return {
+        "items": [
+            {**dict(row), "created_at": row["created_at"].isoformat()} for row in rows
+        ]
+    }
+
+
+@app.post("/api/data/bitrix-exclusions")
+def create_bitrix_exclusion(payload: BitrixExclusionCreate) -> dict:
+    pattern = payload.counterparty_pattern.strip()
+    if not pattern:
+        raise HTTPException(status_code=422, detail="Укажите название контрагента.")
+
+    with database() as connection:
+        existing = connection.execute(
+            "select id from bitrix_match_exclusions where lower(counterparty_pattern) = lower(%s)",
+            [pattern],
+        ).fetchone()
+        if existing:
+            raise HTTPException(status_code=409, detail="Такое исключение уже есть.")
+        row = connection.execute(
+            """
+            insert into bitrix_match_exclusions (counterparty_pattern, note)
+            values (%s, %s)
+            returning id, counterparty_pattern, note, created_at
+            """,
+            [pattern, (payload.note or "").strip() or None],
+        ).fetchone()
+    return {**dict(row), "created_at": row["created_at"].isoformat()}
+
+
+@app.delete("/api/data/bitrix-exclusions/{exclusion_id}")
+def delete_bitrix_exclusion(exclusion_id: int) -> dict:
+    with database() as connection:
+        row = connection.execute(
+            "delete from bitrix_match_exclusions where id = %s returning id",
+            [exclusion_id],
+        ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Исключение не найдено.")
+    return {"deleted": True, "id": exclusion_id}
 
 
 @app.get("/api/data/customer-receipts")

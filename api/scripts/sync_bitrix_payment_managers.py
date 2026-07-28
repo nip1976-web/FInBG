@@ -5,33 +5,32 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
 
 import psycopg
 from psycopg.rows import dict_row
 
+# Run as a plain script (systemd calls it by path), so the package root that
+# holds `app` isn't on sys.path yet.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-INVOICE_RE = re.compile(
-    r"\b(?:сч[её]т(?:у|а|ом)?|сч\.?)(?!\s*-\s*ф)"
-    r"\s*(?:№+\s*:?\s*)?(\d{1,10})\b",
-    re.IGNORECASE,
-)
+from app.documents import as_invoice_number, invoice_numbers  # noqa: E402
 
 # Bitrix throttles webhooks to ~2 req/s; batch invoice lookups so a run over
 # hundreds of payments doesn't turn into one request per invoice number.
 INVOICE_BATCH_SIZE = 50
 
 
-class BitrixNotFound(Exception):
-    """The requested entity does not exist (or the ID is invalid) in Bitrix."""
-
-
 class BitrixCallError(Exception):
-    """A real failure talking to Bitrix (network, 5xx, throttling, bad payload)."""
+    """A failure talking to Bitrix (network, bad request, throttling, 5xx).
+
+    Invoice ids Bitrix doesn't know are *not* an error: crm.item.list simply
+    omits them from the response.
+    """
 
 
 def load_env(path: str) -> None:
@@ -45,16 +44,33 @@ def load_env(path: str) -> None:
                 os.environ.setdefault(key.strip(), value.strip().strip("'\""))
 
 
+def flatten_params(params: dict, prefix: str = "") -> list[tuple[str, object]]:
+    """Expand nested dicts/lists into Bitrix's `filter[@id][0]=...` notation.
+
+    urlencode alone can't do this: handed {"filter": {"@id": [1, 2]}} it
+    iterates the inner dict's keys and sends `filter=@id`, which Bitrix
+    rejects with a bare HTTP 400.
+    """
+    encoded: list[tuple[str, object]] = []
+    for key, value in params.items():
+        full_key = f"{prefix}[{key}]" if prefix else str(key)
+        if isinstance(value, dict):
+            encoded.extend(flatten_params(value, full_key))
+        elif isinstance(value, (list, tuple)):
+            for index, entry in enumerate(value):
+                encoded.append((f"{full_key}[{index}]", entry))
+        else:
+            encoded.append((full_key, value))
+    return encoded
+
+
 def bitrix_call(base: str, method: str, params: dict | None = None) -> dict:
-    payload = urllib.parse.urlencode(params or {}, doseq=True).encode()
+    payload = urllib.parse.urlencode(flatten_params(params or {})).encode()
     request = urllib.request.Request(base + method + ".json", data=payload)
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
             result = json.load(response)
     except urllib.error.HTTPError as error:
-        if error.code == 400:
-            # Bitrix answers unknown/deleted IDs with a plain 400, not a JSON body.
-            raise BitrixNotFound(f"{method}: HTTP 400 for params {params}") from error
         raise BitrixCallError(f"{method}: HTTP {error.code}") from error
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
         raise BitrixCallError(f"{method}: {error}") from error
@@ -89,8 +105,6 @@ def fetch_invoice_managers(
                     "select": ["id", "assignedById"],
                 },
             )
-        except BitrixNotFound:
-            continue
         except BitrixCallError as error:
             print(f"bitrix invoice batch failed: {error}", file=sys.stderr)
             failed_batches.extend(chunk)
@@ -99,12 +113,6 @@ def fetch_invoice_managers(
             if item.get("assignedById"):
                 assigned_by[int(item["id"])] = int(item["assignedById"])
     return assigned_by, failed_batches
-
-
-def invoice_numbers(description: str | None) -> list[int]:
-    if not description:
-        return []
-    return list(dict.fromkeys(int(value) for value in INVOICE_RE.findall(description)))
 
 
 def user_name(user: dict) -> str:
@@ -125,8 +133,14 @@ def main() -> None:
     with psycopg.connect(args.database_url, row_factory=dict_row) as connection:
         payments = connection.execute(
             """
-            select p.id, p.description
+            select
+                p.id,
+                p.description,
+                override.document_kind as override_kind,
+                override.document_number as override_number
             from payments p
+            left join payment_document_overrides override
+              on override.payment_id = p.id
             where p.source = 'payment_battery'
               and p.direction = 'inflow'
               and not p.is_internal_transfer
@@ -135,14 +149,53 @@ def main() -> None:
                   from payment_manager_assignments assignment
                   where assignment.payment_id = p.id
               )
+              -- Marketplaces and similar channels quote their own order id,
+              -- never our Bitrix invoice; looking those numbers up would
+              -- either find nothing or, worse, hit an unrelated invoice.
+              and not exists (
+                  select 1
+                  from bitrix_match_exclusions ex
+                  where strpos(
+                      lower(coalesce(p.raw_counterparty, '')),
+                      lower(ex.counterparty_pattern)
+                  ) > 0
+              )
             order by p.id
             """
         ).fetchall()
 
-        payment_numbers = {
-            payment["id"]: invoice_numbers(payment["description"])
-            for payment in payments
-        }
+        excluded_payments = connection.execute(
+            """
+            select count(*) as total
+            from payments p
+            where p.source = 'payment_battery'
+              and p.direction = 'inflow'
+              and not p.is_internal_transfer
+              and exists (
+                  select 1
+                  from bitrix_match_exclusions ex
+                  where strpos(
+                      lower(coalesce(p.raw_counterparty, '')),
+                      lower(ex.counterparty_pattern)
+                  ) > 0
+              )
+            """
+        ).fetchone()["total"]
+
+        def numbers_for(payment: dict) -> list[int]:
+            # A manual correction replaces what the description says: it is
+            # there precisely because the parsed number was wrong or missing.
+            corrected = as_invoice_number(
+                payment["override_kind"], payment["override_number"]
+            )
+            if corrected is not None:
+                return [corrected]
+            if payment["override_kind"] is not None:
+                # Marked as a спецификация by hand — not a Bitrix invoice.
+                return []
+            return invoice_numbers(payment["description"])
+
+        payment_numbers = {payment["id"]: numbers_for(payment) for payment in payments}
         all_numbers = [n for numbers in payment_numbers.values() for n in numbers]
         assigned_by, failed_numbers = fetch_invoice_managers(webhook, all_numbers)
         failed_set = set(failed_numbers)
@@ -248,6 +301,7 @@ def main() -> None:
                     "document_not_found": not_found,
                     "ambiguous_manager": ambiguous,
                     "lookup_errors": lookup_errors,
+                    "excluded_counterparties": excluded_payments,
                 },
                 ensure_ascii=False,
             )
