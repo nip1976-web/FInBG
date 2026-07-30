@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import Sidebar from "../Sidebar";
+
 const API_URL =
   process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -172,26 +174,7 @@ export default function ImportReviewPage() {
 
   return (
     <main className="app-shell">
-      <aside className="sidebar">
-        <a className="brand brand-link" href="/">
-          <span className="brand-mark">ФК</span>
-          <div>
-            <strong>ФинКонтроль</strong>
-            <span>управленческий учёт</span>
-          </div>
-        </a>
-        <nav aria-label="Основная навигация">
-          <a className="nav-item" href="/"><span className="nav-dot" />Обзор</a>
-          <a className="nav-item" href="/data"><span className="nav-dot" />Загруженные данные</a>
-          <a className="nav-item active" href="/imports">
-            <span className="nav-dot" />Черновик импорта
-          </a>
-        </nav>
-        <div className="sidebar-footer">
-          <span className="avatar">Н</span>
-          <div><strong>Николай</strong><span>Администратор</span></div>
-        </div>
-      </aside>
+      <Sidebar current="/imports" />
 
       <section className="workspace review-workspace">
         <header className="topbar review-topbar">

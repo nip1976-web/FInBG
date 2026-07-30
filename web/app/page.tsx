@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 
+import Sidebar from "./Sidebar";
+
 type DashboardSummary = {
   cash_balance_rub: string;
   inflow_rub: string;
@@ -52,18 +54,6 @@ const periods = {
   },
 };
 
-const nav = [
-  "Обзор",
-  "Сделки",
-  "Деньги",
-  "Покупатели",
-  "Поставщики",
-  "Расходы",
-  "Склад",
-  "Отчёты",
-  "Импорт данных",
-];
-
 const cashBars = [
   { month: "Фев", income: 52, expense: 39 },
   { month: "Мар", income: 66, expense: 58 },
@@ -75,7 +65,6 @@ const cashBars = [
 
 export default function Home() {
   const [period, setPeriod] = useState<keyof typeof periods>("month");
-  const [active, setActive] = useState("Обзор");
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [apiConnected, setApiConnected] = useState(false);
   const data = useMemo(() => periods[period], [period]);
@@ -103,50 +92,13 @@ export default function Home() {
 
   return (
     <main className="app-shell">
-      <aside className="sidebar">
-        <div className="brand">
-          <span className="brand-mark">ФК</span>
-          <div>
-            <strong>ФинКонтроль</strong>
-            <span>управленческий учёт</span>
-          </div>
-        </div>
-
-        <nav aria-label="Основная навигация">
-          {nav.map((item) => (
-            item === "Импорт данных" ? (
-              <a className="nav-item" href="/imports" key={item}>
-                <span className="nav-dot" aria-hidden="true" />
-                {item}
-              </a>
-            ) : (
-              <button
-                className={active === item ? "nav-item active" : "nav-item"}
-                key={item}
-                onClick={() => setActive(item)}
-                type="button"
-              >
-                <span className="nav-dot" aria-hidden="true" />
-                {item}
-              </button>
-            )
-          ))}
-        </nav>
-
-        <div className="sidebar-footer">
-          <span className="avatar">Н</span>
-          <div>
-            <strong>Николай</strong>
-            <span>Администратор</span>
-          </div>
-        </div>
-      </aside>
+      <Sidebar current="/" />
 
       <section className="workspace">
         <header className="topbar">
           <div>
             <p className="eyebrow">Финансовая картина</p>
-            <h1>{active}</h1>
+            <h1>Обзор</h1>
           </div>
           <div className="topbar-actions">
             <span className={apiConnected ? "connection-badge connected" : "connection-badge"}>

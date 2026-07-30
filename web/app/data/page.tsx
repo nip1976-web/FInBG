@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import Sidebar from "../Sidebar";
+
 const API_URL =
   process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -86,9 +88,10 @@ type Deal = {
   match_status: "matched" | "unmatched" | "review";
   manager_name: string | null;
   title: string;
-  payment_id: number | null;
-  linked_payment_date: string | null;
-  linked_payment_amount_rub: string | null;
+  linked_payment_count: number;
+  linked_first_payment_date: string | null;
+  linked_last_payment_date: string | null;
+  linked_amount_rub: string;
 };
 
 type DealTotals = {
@@ -127,6 +130,8 @@ type AvailablePayment = {
   raw_counterparty: string | null;
   description: string | null;
   account_name: string;
+  source_sheet: string | null;
+  source_row: number | null;
 };
 
 type ClientAlias = {
@@ -156,6 +161,13 @@ const date = (value: string | null) =>
   value
     ? new Intl.DateTimeFormat("ru-RU").format(new Date(`${value}T00:00:00`))
     : "—";
+
+const payments_word = (count: number) => {
+  const tail = count % 100 > 10 && count % 100 < 20 ? 0 : count % 10;
+  if (tail === 1) return `${count} платёж`;
+  if (tail >= 2 && tail <= 4) return `${count} платежа`;
+  return `${count} платежей`;
+};
 
 export default function LoadedDataPage() {
   const [dataset, setDataset] = useState<Dataset>("payments");
@@ -612,24 +624,7 @@ export default function LoadedDataPage() {
 
   return (
     <main className="app-shell">
-      <aside className="sidebar">
-        <a className="brand brand-link" href="/">
-          <span className="brand-mark">ФК</span>
-          <div>
-            <strong>ФинКонтроль</strong>
-            <span>управленческий учёт</span>
-          </div>
-        </a>
-        <nav aria-label="Основная навигация">
-          <a className="nav-item" href="/"><span className="nav-dot" />Обзор</a>
-          <a className="nav-item active" href="/data"><span className="nav-dot" />Загруженные данные</a>
-          <a className="nav-item" href="/imports"><span className="nav-dot" />Черновик импорта</a>
-        </nav>
-        <div className="sidebar-footer">
-          <span className="avatar">Н</span>
-          <div><strong>Николай</strong><span>Администратор</span></div>
-        </div>
-      </aside>
+      <Sidebar current="/data" />
 
       <section className={`workspace loaded-workspace${selectedDealId ? " deal-selected" : ""}`}>
         <header className="topbar loaded-topbar">
@@ -1161,16 +1156,20 @@ export default function LoadedDataPage() {
                         <td>
                           <strong>{rub(item.planned_revenue_rub)}</strong>
                         </td>
-                        <td>
+                        <td className="deal-paid-cell">
                           <strong className="amount-inflow">{rub(item.paid_amount_rub)}</strong>
+                          <small className={item.linked_payment_count ? "deal-payments-hint" : undefined}>
+                            {item.linked_payment_count === 0
+                              ? "платежи не привязаны"
+                              : selectedDealId === item.id
+                                ? `${payments_word(item.linked_payment_count)} — ниже`
+                                : `${payments_word(item.linked_payment_count)} · показать`}
+                          </small>
                         </td>
                         <td>
                           <strong className={item.financial_status === "open" ? "negative-text" : "amount-inflow"}>
                             {rub(item.balance_rub)}
                           </strong>
-                          <small>
-                            {selectedDealId === item.id ? "Платежи показаны ниже" : "Выбрать сделку"}
-                          </small>
                         </td>
                         <td>
                           <strong>{eurRate ? eur(Number(item.balance_rub) / Number(eurRate.rate)) : "—"}</strong>

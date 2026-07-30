@@ -843,22 +843,22 @@ def loaded_deals(
                 d.match_status,
                 c.name as customer_name,
                 e.full_name as manager_name,
-                link.payment_id,
-                link.payment_date as linked_payment_date,
-                link.amount_rub as linked_payment_amount_rub
+                link.linked_payment_count,
+                link.first_payment_date as linked_first_payment_date,
+                link.last_payment_date as linked_last_payment_date,
+                link.linked_amount_rub
             from deals d
             join counterparties c on c.id = d.customer_id
             left join employees e on e.id = d.manager_id
             left join lateral (
                 select
-                    p.id as payment_id,
-                    p.payment_date,
-                    p.amount_rub
+                    count(*) as linked_payment_count,
+                    min(p.payment_date) as first_payment_date,
+                    max(p.payment_date) as last_payment_date,
+                    coalesce(sum(pa.allocated_amount_rub), 0) as linked_amount_rub
                 from payment_allocations pa
                 join payments p on p.id = pa.payment_id
                 where pa.deal_id = d.id
-                order by pa.id
-                limit 1
             ) link on true
             {where_sql}
             order by d.payment_date desc, d.id desc
@@ -890,16 +890,18 @@ def loaded_deals(
                 ),
                 "paid_amount_rub": money(row["paid_amount_rub"]),
                 "balance_rub": money(row["balance_rub"]),
-                "linked_payment_date": (
-                    row["linked_payment_date"].isoformat()
-                    if row["linked_payment_date"]
+                "linked_payment_count": row["linked_payment_count"] or 0,
+                "linked_first_payment_date": (
+                    row["linked_first_payment_date"].isoformat()
+                    if row["linked_first_payment_date"]
                     else None
                 ),
-                "linked_payment_amount_rub": (
-                    money(row["linked_payment_amount_rub"])
-                    if row["linked_payment_amount_rub"] is not None
+                "linked_last_payment_date": (
+                    row["linked_last_payment_date"].isoformat()
+                    if row["linked_last_payment_date"]
                     else None
                 ),
+                "linked_amount_rub": money(row["linked_amount_rub"] or 0),
             }
             for row in rows
         ],

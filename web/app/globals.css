@@ -88,6 +88,18 @@ nav { display: grid; gap: 5px; }
 .nav-item:hover, .nav-item.active { background: rgba(255,255,255,.1); color: #fff; }
 .nav-dot { width: 7px; height: 7px; border: 1px solid currentColor; border-radius: 50%; }
 .nav-item.active .nav-dot { background: var(--lime); border-color: var(--lime); }
+.nav-item-planned { color: #7d8b84; cursor: default; }
+.nav-item-planned:hover { background: transparent; color: #7d8b84; }
+.nav-item-planned em {
+  margin-left: auto;
+  padding: 2px 6px;
+  border: 1px solid rgba(255,255,255,.14);
+  border-radius: 999px;
+  font-size: 10px;
+  font-style: normal;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
 .sidebar-footer {
   margin-top: auto;
   padding: 18px 8px 0;
@@ -794,6 +806,16 @@ td .progress + small { display: inline; }
 .deal-row.selected {
   outline: none;
   background: var(--surface-soft);
+}
+.deal-paid-cell { white-space: nowrap; }
+.deal-paid-cell .deal-payments-hint {
+  color: var(--green);
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+.deal-row:hover .deal-paid-cell .deal-payments-hint,
+.deal-row.selected .deal-paid-cell .deal-payments-hint {
+  text-decoration-style: solid;
 }
 .deal-payments-panel {
   margin-top: 18px;
