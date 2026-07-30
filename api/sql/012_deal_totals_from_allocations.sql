@@ -26,12 +26,12 @@ returns trigger
 language plpgsql
 as $$
 begin
-    if tg_op in ('insert', 'update', 'INSERT', 'UPDATE') then
+    if tg_op in ('INSERT', 'UPDATE') then
         perform recompute_deal_totals(new.deal_id);
     end if;
-    if tg_op in ('delete', 'DELETE') then
+    if tg_op = 'DELETE' then
         perform recompute_deal_totals(old.deal_id);
-    elsif tg_op in ('update', 'UPDATE') and new.deal_id is distinct from old.deal_id then
+    elsif tg_op = 'UPDATE' and new.deal_id is distinct from old.deal_id then
         perform recompute_deal_totals(old.deal_id);
     end if;
     return null;

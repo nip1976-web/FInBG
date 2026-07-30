@@ -432,7 +432,7 @@ def main() -> None:
             from deals d
             join counterparties c on c.id = d.customer_id
             where d.source = 'buyers'
-              and not (d.deal_number = any(%(seen)s))
+              and not (d.deal_number = any(%(seen)s::text[]))
             order by d.planned_revenue_rub desc
             """,
             {"seen": seen_deal_numbers},

@@ -162,7 +162,7 @@ const date = (value: string | null) =>
     ? new Intl.DateTimeFormat("ru-RU").format(new Date(`${value}T00:00:00`))
     : "—";
 
-const payments_word = (count: number) => {
+const paymentsWord = (count: number) => {
   const tail = count % 100 > 10 && count % 100 < 20 ? 0 : count % 10;
   if (tail === 1) return `${count} платёж`;
   if (tail >= 2 && tail <= 4) return `${count} платежа`;
@@ -1162,8 +1162,8 @@ export default function LoadedDataPage() {
                             {item.linked_payment_count === 0
                               ? "платежи не привязаны"
                               : selectedDealId === item.id
-                                ? `${payments_word(item.linked_payment_count)} — ниже`
-                                : `${payments_word(item.linked_payment_count)} · показать`}
+                                ? `${paymentsWord(item.linked_payment_count)} — ниже`
+                                : `${paymentsWord(item.linked_payment_count)} · показать`}
                           </small>
                         </td>
                         <td>
