@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 const links = [
   { label: "Обзор", href: "/" },
   { label: "Загруженные данные", href: "/data" },
@@ -30,21 +32,21 @@ export default function Sidebar({ current }: { current: string }) {
       {current === "/" ? (
         <div className="brand">{brand}</div>
       ) : (
-        <a className="brand brand-link" href="/">
+        <Link className="brand brand-link" href="/">
           {brand}
-        </a>
+        </Link>
       )}
 
       <nav aria-label="Основная навигация">
         {links.map((link) => (
-          <a
+          <Link
             className={current === link.href ? "nav-item active" : "nav-item"}
             href={link.href}
             key={link.href}
           >
             <span className="nav-dot" aria-hidden="true" />
             {link.label}
-          </a>
+          </Link>
         ))}
         {planned.map((label) => (
           <span className="nav-item nav-item-planned" key={label}>

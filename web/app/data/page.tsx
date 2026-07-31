@@ -108,6 +108,14 @@ type PageResponse<T> = {
   items: T[];
 };
 
+type ApiError = {
+  detail?: string;
+};
+
+type ItemsResponse<T> = {
+  items: T[];
+};
+
 type DealPayment = {
   id: number;
   payment_date: string;
@@ -293,9 +301,13 @@ export default function LoadedDataPage() {
       }
       const payload = await rowsResponse.json();
       if (loadAbortRef.current !== controller) return; // superseded by a newer request
-      if (dataset === "payments") setPayments(payload);
-      else if (dataset === "deals") setDeals(payload);
-      else setAliases(payload);
+      if (dataset === "payments") {
+        setPayments(payload as PageResponse<Payment>);
+      } else if (dataset === "deals") {
+        setDeals(payload as PageResponse<Deal>);
+      } else {
+        setAliases(payload as PageResponse<ClientAlias>);
+      }
     } catch (requestError) {
       if ((requestError as Error).name === "AbortError") return;
       setError((requestError as Error).message);
@@ -308,7 +320,7 @@ export default function LoadedDataPage() {
     try {
       const response = await fetch(`${API_URL}/api/data/bitrix-exclusions`);
       if (!response.ok) throw new Error("Не удалось получить список исключений");
-      const payload = await response.json();
+      const payload = (await response.json()) as ItemsResponse<BitrixExclusion>;
       setExclusions(payload.items);
     } catch (requestError) {
       setError((requestError as Error).message);
@@ -325,12 +337,18 @@ export default function LoadedDataPage() {
   useEffect(() => {
     fetch(`${API_URL}/api/reference/eur-rate`)
       .then((response) => (response.ok ? response.json() : null))
-      .then((payload) => setEurRate(payload))
+      .then((payload) =>
+        setEurRate(payload as { rate: string; rate_date: string } | null)
+      )
       .catch(() => setEurRate(null));
   }, []);
 
   useEffect(() => {
-    if (dataset === "payments") loadExclusions();
+    if (dataset !== "payments") return;
+    const timeout = setTimeout(() => {
+      void loadExclusions();
+    }, 0);
+    return () => clearTimeout(timeout);
   }, [dataset, loadExclusions]);
 
   const current = dataset === "payments" ? payments : dataset === "deals" ? deals : aliases;
@@ -408,7 +426,7 @@ export default function LoadedDataPage() {
             body: JSON.stringify({ document_kind: kind, document_number: trimmed }),
           });
       if (!response.ok) {
-        const payload = await response.json().catch(() => ({}));
+        const payload = (await response.json().catch(() => ({}))) as ApiError;
         throw new Error(payload.detail || "Не удалось сохранить номер документа.");
       }
       setDocumentDrafts((current) => {
@@ -503,7 +521,7 @@ export default function LoadedDataPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ counterparty_pattern: pattern }),
       });
-      const payload = await response.json();
+      const payload = (await response.json()) as ApiError;
       if (!response.ok) throw new Error(payload.detail || "Не удалось добавить исключение.");
       setNewExclusion("");
       await loadExclusions();
@@ -537,7 +555,7 @@ export default function LoadedDataPage() {
     try {
       const response = await fetch(`${API_URL}/api/data/deals/${dealId}/candidate-payments`);
       if (!response.ok) throw new Error("Не удалось получить операции покупателя.");
-      const payload = await response.json();
+      const payload = (await response.json()) as ItemsResponse<AvailablePayment>;
       setCandidatePayments(payload.items);
       setAllocationAmounts(Object.fromEntries(payload.items.map((item: AvailablePayment) => [item.id, item.available_amount_rub])));
     } catch (requestError) {
@@ -564,11 +582,11 @@ export default function LoadedDataPage() {
           allocated_amount_rub: amount.replace(",", "."),
         }),
       });
-      const payload = await response.json();
+      const payload = (await response.json()) as ApiError;
       if (!response.ok) throw new Error(payload.detail || "Не удалось сохранить связь.");
       const dealResponse = await fetch(`${API_URL}/api/data/deals/${selectedDealId}/payments`);
       if (!dealResponse.ok) throw new Error("Связь сохранена, но список платежей не обновился.");
-      const dealPayload = await dealResponse.json();
+      const dealPayload = (await dealResponse.json()) as ItemsResponse<DealPayment>;
       setDealPayments((current) => ({ ...current, [selectedDealId]: dealPayload.items }));
       loadCandidatePayments(selectedDealId);
       load();
@@ -610,7 +628,7 @@ export default function LoadedDataPage() {
         `${API_URL}/api/data/deals/${dealId}/payments`
       );
       if (!response.ok) throw new Error("Не удалось получить платежи сделки");
-      const payload = await response.json();
+      const payload = (await response.json()) as ItemsResponse<DealPayment>;
       setDealPayments((current) => ({
         ...current,
         [dealId]: payload.items,

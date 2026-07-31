@@ -96,8 +96,10 @@ export default function ImportReviewPage() {
     if (!summaryResponse.ok || !categoriesResponse.ok) {
       throw new Error("Не удалось получить сводку импорта");
     }
-    setSummary(await summaryResponse.json());
-    const categoryPayload = await categoriesResponse.json();
+    setSummary((await summaryResponse.json()) as ImportSummary);
+    const categoryPayload = (await categoriesResponse.json()) as {
+      items: string[];
+    };
     setCategories(categoryPayload.items);
   }, []);
 
@@ -116,15 +118,18 @@ export default function ImportReviewPage() {
       `${API_URL}/api/imports/operations?${params.toString()}`
     );
     if (!response.ok) throw new Error("Не удалось получить операции");
-    setOperations(await response.json());
+    setOperations((await response.json()) as OperationsResponse);
   }, [mode, page, search, sheet]);
 
   useEffect(() => {
-    setLoading(true);
-    setError("");
-    Promise.all([loadSummary(), loadOperations()])
-      .catch((requestError: Error) => setError(requestError.message))
-      .finally(() => setLoading(false));
+    const timeout = setTimeout(() => {
+      setLoading(true);
+      setError("");
+      Promise.all([loadSummary(), loadOperations()])
+        .catch((requestError: Error) => setError(requestError.message))
+        .finally(() => setLoading(false));
+    }, 0);
+    return () => clearTimeout(timeout);
   }, [loadOperations, loadSummary]);
 
   const updateOperation = async (
@@ -143,7 +148,7 @@ export default function ImportReviewPage() {
         }
       );
       if (!response.ok) throw new Error("Изменение не сохранено");
-      const updated = await response.json();
+      const updated = (await response.json()) as Partial<Operation>;
       setOperations((current) =>
         current
           ? {
