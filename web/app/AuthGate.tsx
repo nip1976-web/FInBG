@@ -53,7 +53,7 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
           credentials: "include",
           body: JSON.stringify({ credential: response.credential }),
         });
-        const payload = await loginResponse.json();
+        const payload = (await loginResponse.json()) as { detail?: string };
         if (!loginResponse.ok) {
           throw new Error(payload.detail || "Вход отклонён.");
         }

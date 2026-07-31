@@ -140,6 +140,9 @@ type AvailablePayment = {
   account_name: string;
   source_sheet: string | null;
   source_row: number | null;
+  operation_type: string | null;
+  is_internal_transfer: boolean;
+  is_revenue: boolean;
 };
 
 type ClientAlias = {
@@ -188,6 +191,8 @@ export default function LoadedDataPage() {
   const [dealPaymentsLoading, setDealPaymentsLoading] = useState<number | null>(null);
   const [candidatePayments, setCandidatePayments] = useState<AvailablePayment[]>([]);
   const [candidatePaymentsLoading, setCandidatePaymentsLoading] = useState(false);
+  const [showOtherReceipts, setShowOtherReceipts] = useState(false);
+  const [otherReceiptsCount, setOtherReceiptsCount] = useState(0);
   const [allocationAmounts, setAllocationAmounts] = useState<Record<number, string>>({});
   const [manualSavingPaymentId, setManualSavingPaymentId] = useState<number | null>(null);
   const [manualError, setManualError] = useState("");
@@ -547,16 +552,18 @@ export default function LoadedDataPage() {
     }
   };
 
-  const loadCandidatePayments = async (dealId: number) => {
+  const loadCandidatePayments = async (dealId: number, includeOther = showOtherReceipts) => {
     setCandidatePaymentsLoading(true);
     setCandidatePayments([]);
     setAllocationAmounts({});
     setManualError("");
     try {
-      const response = await fetch(`${API_URL}/api/data/deals/${dealId}/candidate-payments`);
+      const query = includeOther ? "?include_other=true" : "";
+      const response = await fetch(`${API_URL}/api/data/deals/${dealId}/candidate-payments${query}`);
       if (!response.ok) throw new Error("Не удалось получить операции покупателя.");
-      const payload = (await response.json()) as ItemsResponse<AvailablePayment>;
+      const payload = (await response.json()) as ItemsResponse<AvailablePayment> & { other_count: number };
       setCandidatePayments(payload.items);
+      setOtherReceiptsCount(payload.other_count ?? 0);
       setAllocationAmounts(Object.fromEntries(payload.items.map((item: AvailablePayment) => [item.id, item.available_amount_rub])));
     } catch (requestError) {
       setManualError((requestError as Error).message);
@@ -1255,11 +1262,30 @@ export default function LoadedDataPage() {
                 <div className="candidate-payments">
                   <div className="candidate-payments-title">
                     <strong>Операции покупателя без связи со сделкой</strong>
-                    <span>Можно распределить остаток одной операции между несколькими сделками.</span>
+                    <span>
+                      Можно распределить остаток одной операции между несколькими сделками.
+                      <label className="candidate-other-toggle">
+                        <input
+                          type="checkbox"
+                          checked={showOtherReceipts}
+                          onChange={(event) => {
+                            const next = event.target.checked;
+                            setShowOtherReceipts(next);
+                            loadCandidatePayments(selectedDeal.id, next);
+                          }}
+                        />
+                        Показать прочие поступления
+                        {!showOtherReceipts && otherReceiptsCount > 0 && ` (скрыто: ${otherReceiptsCount})`}
+                      </label>
+                    </span>
                   </div>
                   {candidatePaymentsLoading && <p>Загрузка операций покупателя…</p>}
                   {!candidatePaymentsLoading && candidatePayments.length === 0 && (
-                    <p>Нераспределённых операций этого покупателя не найдено.</p>
+                    <p>
+                      {otherReceiptsCount > 0 && !showOtherReceipts
+                        ? `Оплат за товар без связи со сделкой нет. Скрыто прочих поступлений: ${otherReceiptsCount}.`
+                        : "Нераспределённых операций этого покупателя не найдено."}
+                    </p>
                   )}
                   {candidatePayments.map((payment) => (
                     <article key={payment.id}>
@@ -1268,7 +1294,14 @@ export default function LoadedDataPage() {
                         <small>{payment.account_name} · {payment.source_sheet}, строка {payment.source_row}</small>
                       </div>
                       <div>
-                        <strong>{payment.raw_counterparty || "Контрагент не указан"}</strong>
+                        <strong>
+                          {payment.raw_counterparty || "Контрагент не указан"}
+                          {!payment.is_revenue && (
+                            <em className="candidate-other-mark">
+                              не выручка · {payment.is_internal_transfer ? "внутренний перевод" : payment.operation_type || "прочее"}
+                            </em>
+                          )}
+                        </strong>
                         <small>{payment.description || "Без пояснения"}</small>
                       </div>
                       <div>

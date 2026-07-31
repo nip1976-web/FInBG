@@ -83,6 +83,16 @@ def ilike_term(value: str) -> str:
     return f"%{escaped}%"
 
 
+MAIN_ACTIVITY = "Основная деятельность"
+
+
+def is_revenue_receipt(row) -> bool:
+    """Money the customer paid us for goods, as opposed to everything else
+    that lands on the account: refunds, returned deposits, bank interest and
+    transfers between our own accounts. Only revenue belongs on a deal."""
+    return row["operation_type"] == MAIN_ACTIVITY and not row["is_internal_transfer"]
+
+
 @app.get("/api/reference/eur-rate")
 def current_eur_rate() -> dict:
     global EUR_RATE_CACHE
@@ -1045,7 +1055,16 @@ def available_payments_for_allocation(
 
 
 @app.get("/api/data/deals/{deal_id}/candidate-payments")
-def deal_candidate_payments(deal_id: int) -> dict:
+def deal_candidate_payments(deal_id: int, include_other: bool = False) -> dict:
+    """Receipts of this customer that could still be linked to the deal.
+
+    Only revenue is offered by default. Refunds, deposits returned, bank
+    interest and transfers between our own accounts are receipts too, but
+    linking one to a deal would count it as money the customer paid for
+    goods. They stay behind include_other rather than being dropped outright,
+    because the classification comes from the source file and is occasionally
+    wrong — hiding such a payment for good would leave no way to link it.
+    """
     with database() as connection:
         deal = connection.execute(
             """
@@ -1069,6 +1088,8 @@ def deal_candidate_payments(deal_id: int) -> dict:
                 p.description,
                 p.source_sheet,
                 p.source_row,
+                p.operation_type,
+                p.is_internal_transfer,
                 a.name as account_name,
                 coalesce(sum(pa.allocated_amount_rub), 0) as allocated_amount_rub,
                 p.amount_rub - coalesce(sum(pa.allocated_amount_rub), 0) as available_amount_rub
@@ -1110,6 +1131,9 @@ def deal_candidate_payments(deal_id: int) -> dict:
             },
         ).fetchall()
 
+    revenue = [row for row in rows if is_revenue_receipt(row)]
+    shown = rows if include_other else revenue
+
     return {
         "items": [
             {
@@ -1118,9 +1142,11 @@ def deal_candidate_payments(deal_id: int) -> dict:
                 "amount_rub": money(row["amount_rub"]),
                 "allocated_amount_rub": money(row["allocated_amount_rub"]),
                 "available_amount_rub": money(row["available_amount_rub"]),
+                "is_revenue": is_revenue_receipt(row),
             }
-            for row in rows
-        ]
+            for row in shown
+        ],
+        "other_count": len(rows) - len(revenue),
     }
 
 
