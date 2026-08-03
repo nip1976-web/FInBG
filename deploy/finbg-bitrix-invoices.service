@@ -1,0 +1,17 @@
+[Unit]
+Description=FinBG Bitrix invoice currency sync
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=finbg
+Group=finbg
+WorkingDirectory=/opt/finbg/api
+Environment=DATABASE_URL=dbname=finbg
+ExecStart=/opt/finbg/venv/bin/python /opt/finbg/api/scripts/sync_bitrix_invoices.py --apply
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/opt/finbg

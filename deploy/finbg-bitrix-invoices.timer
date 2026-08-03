@@ -1,0 +1,13 @@
+[Unit]
+Description=Refresh Bitrix invoice currency and amount hourly
+
+[Timer]
+# Валюта у счёта не меняется, но счета появляются новые, а суммы правят.
+# Часа достаточно: это пять запросов к Bitrix, не нагрузка.
+OnBootSec=5min
+OnUnitActiveSec=1h
+Persistent=true
+Unit=finbg-bitrix-invoices.service
+
+[Install]
+WantedBy=timers.target
