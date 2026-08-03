@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 from decimal import Decimal
 from pathlib import Path
 
@@ -40,6 +41,19 @@ def text(value: object) -> str | None:
         return None
     value = str(value).strip()
     return value or None
+
+
+def normalize_name(value: object) -> str:
+    """Повторяет normalize_counterparty_name в базе и normalize_name в загрузчике.
+
+    Три реализации обязаны совпадать: разойдутся — проверка покажет
+    благополучие там, где заливка заведёт клиента заново.
+    """
+    normalized = str(value or "").lower()
+    normalized = re.sub(r'[«»"\'.,()№]', " ", normalized)
+    normalized = re.sub(r"\b(ооо|зао|оао|пао|ип|ао|филиал)\b", " ", normalized)
+    normalized = re.sub(r"[^a-zа-яё0-9]+", " ", normalized)
+    return re.sub(r"\s+", " ", normalized).strip()
 
 
 def buyers_deal_number(
@@ -94,11 +108,18 @@ def main() -> int:
         return 2
 
     with psycopg.connect(arguments.database_url, row_factory=dict_row) as connection:
-        # покупатели: ищем ровно так же, как загрузчик — по точному названию
+        # покупатели: ищем ровно так же, как загрузчик — по нормализованному
+        # названию, а если не нашлось, то по списку альтернативных написаний
         known_customers = {
-            row["name"]: row["id"]
+            row["key"]: row["id"]
             for row in connection.execute(
-                "select id, name from counterparties"
+                """
+                select normalize_counterparty_name(name) as key, id
+                from counterparties
+                union all
+                select normalize_counterparty_name(alias_name), counterparty_id
+                from counterparty_name_aliases
+                """
             ).fetchall()
         }
 
@@ -137,7 +158,7 @@ def main() -> int:
             if customer is None:
                 unresolved_rows += 1
                 continue
-            customer_id = known_customers.get(customer)
+            customer_id = known_customers.get(normalize_name(customer))
             if customer_id is None:
                 # такого покупателя в базе нет — заливка заведёт нового, и все
                 # его сделки получат новые паспорта

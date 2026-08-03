@@ -153,16 +153,37 @@ def main() -> None:
             if customer is None:
                 continue
             if customer not in customer_ids:
+                # Опознаём клиента, не завися от написания: форма собственности,
+                # кавычки, порядок слов и регистр отбрасываются. Названия в
+                # файле пишутся так, чтобы их было удобно читать менеджерам, и
+                # переформатирование не должно означать нового клиента.
+                #
+                # Сокращение против полного написания («Приангарский ЛПК» и
+                # «Приангарский Лесоперерабатывающий Комплекс») формулой не
+                # ловится — для этого список альтернативных написаний, который
+                # заводится с подтверждения человека.
                 counterparty = connection.execute(
                     """
                     select id
                     from counterparties
-                    where name = %(name)s
+                    where normalize_counterparty_name(name)
+                          = normalize_counterparty_name(%(name)s)
                     order by id
                     limit 1
                     """,
                     {"name": customer},
                 ).fetchone()
+                if counterparty is None:
+                    counterparty = connection.execute(
+                        """
+                        select counterparty_id as id
+                        from counterparty_name_aliases
+                        where normalize_counterparty_name(alias_name)
+                              = normalize_counterparty_name(%(name)s)
+                        limit 1
+                        """,
+                        {"name": customer},
+                    ).fetchone()
                 if counterparty is None:
                     counterparty = connection.execute(
                         """
