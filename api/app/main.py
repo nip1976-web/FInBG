@@ -95,6 +95,34 @@ def is_revenue_receipt(row) -> bool:
 
 @app.get("/api/reference/eur-rate")
 def current_eur_rate() -> dict:
+    """Курс евро на сегодня — из таблицы fx_rates, которую наполняет
+    fetch_cbr_rates.py раз в сутки.
+
+    ЦБ устанавливает курс по рабочим дням на следующий рабочий день, а в пятницу
+    сразу на выходные, поэтому «курс на сегодня» — это последняя строка с датой
+    не позже сегодняшней. В понедельник ей окажется пятничная запись, датированная
+    субботой, и это правильно, а не отставание.
+
+    Если таблица пуста (расписание ещё не отработало или база только развёрнута),
+    ходим на сайт ЦБ напрямую, как раньше.
+    """
+    with database() as connection:
+        row = connection.execute(
+            """
+            select rate_date, rate_to_rub
+            from fx_rates
+            where currency = 'EUR' and rate_date <= current_date
+            order by rate_date desc
+            limit 1
+            """
+        ).fetchone()
+    if row is not None:
+        return {
+            "rate": money(row["rate_to_rub"]),
+            "rate_date": row["rate_date"].strftime("%d.%m.%Y"),
+            "source": "ЦБ РФ",
+        }
+
     global EUR_RATE_CACHE
     now = datetime.now(timezone.utc)
     if EUR_RATE_CACHE and now - EUR_RATE_CACHE[0] < timedelta(hours=6):

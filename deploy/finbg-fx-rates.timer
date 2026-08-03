@@ -1,0 +1,15 @@
+[Unit]
+Description=Fetch CBR currency rates every morning
+
+[Timer]
+# ЦБ публикует курс на следующий день вечером предыдущего рабочего дня,
+# так что к утру он уже готов. Время серверное, оно же московское.
+OnCalendar=*-*-* 09:00:00
+# если сервер в этот момент не работал, запуск наверстывается при включении,
+# а не пропускается молча
+Persistent=true
+RandomizedDelaySec=5min
+Unit=finbg-fx-rates.service
+
+[Install]
+WantedBy=timers.target

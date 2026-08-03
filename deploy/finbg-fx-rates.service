@@ -1,0 +1,17 @@
+[Unit]
+Description=FinBG CBR currency rates fetch
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=finbg
+Group=finbg
+WorkingDirectory=/opt/finbg/imports
+Environment=DATABASE_URL=dbname=finbg
+ExecStart=/opt/finbg/venv/bin/python /opt/finbg/imports/fetch_cbr_rates.py
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/opt/finbg
