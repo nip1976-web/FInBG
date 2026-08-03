@@ -914,6 +914,13 @@ td .progress + small { display: inline; }
 .candidate-payments-title strong,
 .candidate-payments-title span { display: block; }
 .candidate-payments-title span { color: var(--muted); font-size: 10px; text-align: right; }
+.invoice-currency {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.4;
+}
 .candidate-other-toggle {
   display: flex;
   align-items: center;

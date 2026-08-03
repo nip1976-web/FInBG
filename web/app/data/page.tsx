@@ -85,6 +85,9 @@ type Deal = {
   paid_amount_rub: string;
   balance_rub: string;
   balance_eur: string | null;
+  invoice_currency: string | null;
+  invoice_amount: string | null;
+  paid_eur: string | null;
   financial_status: "open" | "closed" | "advance";
   match_status: "matched" | "unmatched" | "review";
   manager_name: string | null;
@@ -1183,9 +1186,19 @@ export default function LoadedDataPage() {
                         <td>{date(item.opened_on)}</td>
                         <td>
                           <strong>{rub(item.planned_revenue_rub)}</strong>
+                          {item.invoice_currency === "EUR" && item.invoice_amount && (
+                            <small className="invoice-currency">
+                              счёт в евро: {eur(Number(item.invoice_amount))}
+                            </small>
+                          )}
                         </td>
                         <td className="deal-paid-cell">
                           <strong className="amount-inflow">{rub(item.paid_amount_rub)}</strong>
+                          {item.invoice_currency === "EUR" && item.paid_eur && (
+                            <small className="invoice-currency">
+                              по курсам дат: {eur(Number(item.paid_eur))}
+                            </small>
+                          )}
                           <small className={item.linked_payment_count ? "deal-payments-hint" : undefined}>
                             {item.linked_payment_count === 0
                               ? "платежи не привязаны"

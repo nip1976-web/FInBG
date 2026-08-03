@@ -109,6 +109,52 @@ EUR_RATE_SQL = """(
     limit 1
 )"""
 
+# Счёт из Bitrix, если сделка на него ссылается. Номер счёта в сделке совпадает
+# с кодом записи в Bitrix. Приведение к числу спрятано в case: у спецификаций
+# номер бывает нечисловым, и без этого запрос падал бы на приведении типа.
+BITRIX_INVOICE_JOIN = """
+    left join bitrix_invoices bi on bi.bitrix_invoice_id = case
+        when d.original_document_type = 'счет'
+         and d.original_document_number ~ '^[0-9]+$'
+        then d.original_document_number::bigint
+    end
+"""
+
+# Сколько по сделке заплачено в евро. Каждый платёж пересчитывается по курсу ЦБ
+# на свою дату — именно так считает клиент, оплачивая валютный счёт рублями.
+# Берём распределённую на сделку часть, а не всю сумму платежа: один платёж
+# может закрывать несколько сделок.
+EUR_PAID_JOIN = """
+    left join lateral (
+        select round(coalesce(sum(
+            pa_eur.allocated_amount_rub / (
+                select f.rate_to_rub
+                from fx_rates f
+                where f.currency = 'EUR' and f.rate_date <= p_eur.payment_date
+                order by f.rate_date desc
+                limit 1
+            )
+        ), 0), 2) as paid_eur
+        from payment_allocations pa_eur
+        join payments p_eur on p_eur.id = pa_eur.payment_id
+        where pa_eur.deal_id = d.id
+    ) eur on true
+"""
+
+# Остаток по сделке. Для валютного счёта ведём его в валюте счёта, а рублёвый
+# эквивалент показываем по сегодняшнему курсу — он меняется день ото дня и
+# фиксированным числом быть не может. Для рублёвого счёта всё как раньше.
+BALANCE_EUR_SQL = f"""case
+    when bi.currency = 'EUR' then bi.amount - coalesce(eur.paid_eur, 0)
+    else round(d.balance_rub / nullif({EUR_RATE_SQL}, 0), 2)
+end"""
+
+BALANCE_RUB_SQL = f"""case
+    when bi.currency = 'EUR'
+    then round((bi.amount - coalesce(eur.paid_eur, 0)) * {EUR_RATE_SQL}, 2)
+    else d.balance_rub
+end"""
+
 
 def is_revenue_receipt(row) -> bool:
     """Money the customer paid us for goods, as opposed to everything else
@@ -856,9 +902,7 @@ def loaded_deals(
             conditions.append(f"cast({expression} as text) ilike %s")
             params.append(ilike_term(normalized))
     if balance_eur is not None:
-        conditions.append(
-            f"round(d.balance_rub / nullif({EUR_RATE_SQL}, 0), 2) = round(%s, 2)"
-        )
+        conditions.append(f"round({BALANCE_EUR_SQL}, 2) = round(%s, 2)")
         params.append(balance_eur)
 
     where_sql = f"where {' and '.join(conditions)}"
@@ -871,6 +915,8 @@ def loaded_deals(
             from deals d
             join counterparties c on c.id = d.customer_id
             left join employees e on e.id = d.manager_id
+            {BITRIX_INVOICE_JOIN}
+            {EUR_PAID_JOIN}
             {where_sql}
             """,
             params,
@@ -880,14 +926,14 @@ def loaded_deals(
             select
                 coalesce(sum(d.planned_revenue_rub), 0) as planned_revenue_rub,
                 coalesce(sum(d.paid_amount_rub), 0) as paid_amount_rub,
-                coalesce(sum(d.balance_rub), 0) as balance_rub,
-                round(
-                    coalesce(sum(d.balance_rub), 0) / nullif({EUR_RATE_SQL}, 0), 2
-                ) as balance_eur,
+                coalesce(sum({BALANCE_RUB_SQL}), 0) as balance_rub,
+                coalesce(sum({BALANCE_EUR_SQL}), 0) as balance_eur,
                 {EUR_RATE_SQL} as eur_rate
             from deals d
             join counterparties c on c.id = d.customer_id
             left join employees e on e.id = d.manager_id
+            {BITRIX_INVOICE_JOIN}
+            {EUR_PAID_JOIN}
             {where_sql}
             """,
             params,
@@ -905,8 +951,11 @@ def loaded_deals(
                 d.payment_date,
                 d.planned_revenue_rub,
                 d.paid_amount_rub,
-                d.balance_rub,
-                round(d.balance_rub / nullif({EUR_RATE_SQL}, 0), 2) as balance_eur,
+                {BALANCE_RUB_SQL} as balance_rub,
+                {BALANCE_EUR_SQL} as balance_eur,
+                bi.currency as invoice_currency,
+                bi.amount as invoice_amount,
+                eur.paid_eur,
                 d.financial_status,
                 d.match_status,
                 c.name as customer_name,
@@ -918,6 +967,8 @@ def loaded_deals(
             from deals d
             join counterparties c on c.id = d.customer_id
             left join employees e on e.id = d.manager_id
+            {BITRIX_INVOICE_JOIN}
+            {EUR_PAID_JOIN}
             left join lateral (
                 select
                     count(*) as linked_payment_count,
@@ -972,6 +1023,15 @@ def loaded_deals(
                     money(row["balance_eur"])
                     if row["balance_eur"] is not None
                     else None
+                ),
+                "invoice_currency": row["invoice_currency"],
+                "invoice_amount": (
+                    money(row["invoice_amount"])
+                    if row["invoice_amount"] is not None
+                    else None
+                ),
+                "paid_eur": (
+                    money(row["paid_eur"]) if row["paid_eur"] is not None else None
                 ),
                 "linked_payment_count": row["linked_payment_count"] or 0,
                 "linked_first_payment_date": (
