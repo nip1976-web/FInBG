@@ -84,6 +84,7 @@ type Deal = {
   planned_revenue_rub: string;
   paid_amount_rub: string;
   balance_rub: string;
+  balance_eur: string | null;
   financial_status: "open" | "closed" | "advance";
   match_status: "matched" | "unmatched" | "review";
   manager_name: string | null;
@@ -98,6 +99,8 @@ type DealTotals = {
   planned_revenue_rub: string;
   paid_amount_rub: string;
   balance_rub: string;
+  balance_eur: string | null;
+  eur_rate: string | null;
 };
 
 type PageResponse<T> = {
@@ -168,6 +171,16 @@ const eur = (value: number) =>
     maximumFractionDigits: 2,
   }).format(value);
 
+// курс ЦБ — четыре знака после запятой, как публикует банк:
+// округление до копеек искажает пересчёт крупных сумм
+const rate = (value: string) =>
+  new Intl.NumberFormat("ru-RU", {
+    style: "currency",
+    currency: "RUB",
+    minimumFractionDigits: 4,
+    maximumFractionDigits: 4,
+  }).format(Number(value));
+
 const date = (value: string | null) =>
   value
     ? new Intl.DateTimeFormat("ru-RU").format(new Date(`${value}T00:00:00`))
@@ -185,7 +198,6 @@ export default function LoadedDataPage() {
   const [payments, setPayments] = useState<PageResponse<Payment> | null>(null);
   const [deals, setDeals] = useState<PageResponse<Deal> | null>(null);
   const [aliases, setAliases] = useState<PageResponse<ClientAlias> | null>(null);
-  const [eurRate, setEurRate] = useState<{ rate: string; rate_date: string } | null>(null);
   const [selectedDealId, setSelectedDealId] = useState<number | null>(null);
   const [dealPayments, setDealPayments] = useState<Record<number, DealPayment[]>>({});
   const [dealPaymentsLoading, setDealPaymentsLoading] = useState<number | null>(null);
@@ -292,9 +304,9 @@ export default function LoadedDataPage() {
           if (value.trim()) params.set(key, value.trim());
         });
         const balanceEur = Number(dealColumnFilters.balanceEur.replace(",", "."));
-        if (dealColumnFilters.balanceEur.trim() && Number.isFinite(balanceEur) && eurRate) {
+        if (dealColumnFilters.balanceEur.trim() && Number.isFinite(balanceEur)) {
+          // курс подставит сервер: он берёт его из базы, а не из браузера
           params.set("balance_eur", String(balanceEur));
-          params.set("eur_rate", eurRate.rate);
         }
       }
       const rowsResponse = await fetch(
@@ -319,7 +331,7 @@ export default function LoadedDataPage() {
     } finally {
       if (loadAbortRef.current === controller) setLoading(false);
     }
-  }, [dataset, dealFilter, dealColumnFilters, paymentColumnFilters, onlyBitrixMismatch, eurRate, page, search]);
+  }, [dataset, dealFilter, dealColumnFilters, paymentColumnFilters, onlyBitrixMismatch, page, search]);
 
   const loadExclusions = useCallback(async () => {
     try {
@@ -338,15 +350,6 @@ export default function LoadedDataPage() {
     }, 300);
     return () => clearTimeout(timeout);
   }, [load]);
-
-  useEffect(() => {
-    fetch(`${API_URL}/api/reference/eur-rate`)
-      .then((response) => (response.ok ? response.json() : null))
-      .then((payload) =>
-        setEurRate(payload as { rate: string; rate_date: string } | null)
-      )
-      .catch(() => setEurRate(null));
-  }, []);
 
   useEffect(() => {
     if (dataset !== "payments") return;
@@ -1197,8 +1200,8 @@ export default function LoadedDataPage() {
                           </strong>
                         </td>
                         <td>
-                          <strong>{eurRate ? eur(Number(item.balance_rub) / Number(eurRate.rate)) : "—"}</strong>
-                          {eurRate && <small>ЦБ: {rub(eurRate.rate)}</small>}
+                          <strong>{item.balance_eur !== null ? eur(Number(item.balance_eur)) : "—"}</strong>
+                          {deals?.totals?.eur_rate && <small>ЦБ: {rate(deals.totals.eur_rate)}</small>}
                         </td>
                       </tr>
                   ))}
@@ -1211,8 +1214,8 @@ export default function LoadedDataPage() {
                       <td />
                       <td>{rub(deals.totals.balance_rub)}</td>
                       <td>
-                        {eurRate
-                          ? eur(Number(deals.totals.balance_rub) / Number(eurRate.rate))
+                        {deals.totals.balance_eur !== null
+                          ? eur(Number(deals.totals.balance_eur))
                           : "—"}
                       </td>
                     </tr>

@@ -77,6 +77,15 @@ def money(value: Decimal | None) -> str:
     return str((value or Decimal("0.00")).quantize(Decimal("0.01")))
 
 
+def fx_rate(value: Decimal | None) -> str:
+    """Курс ЦБ публикуется с четырьмя знаками после запятой.
+
+    Округлять его до копеек нельзя: 91,1925 против 91,19 — это четверть копейки
+    на евро, а на счёте в сотню тысяч евро расхождение уже в сотнях рублей.
+    """
+    return str((value or Decimal("0")).quantize(Decimal("0.0001")))
+
+
 def ilike_term(value: str) -> str:
     """Escape LIKE metacharacters so user input can't widen its own filter."""
     escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
@@ -84,6 +93,21 @@ def ilike_term(value: str) -> str:
 
 
 MAIN_ACTIVITY = "Основная деятельность"
+
+# Курс евро на сегодня из нашей таблицы. ЦБ устанавливает курс на следующий
+# рабочий день, а в пятницу сразу на выходные, поэтому берём последнюю строку с
+# датой не позже сегодняшней: в понедельник ей окажется пятничная запись.
+#
+# Пересчёт в евро считаем здесь, а не в браузере: в базе курс лежит с полной
+# точностью и делится точными числами, а не двоичной плавающей запятой. Курс —
+# четыре знака после запятой, результат округляем до копеек.
+EUR_RATE_SQL = """(
+    select f.rate_to_rub
+    from fx_rates f
+    where f.currency = 'EUR' and f.rate_date <= current_date
+    order by f.rate_date desc
+    limit 1
+)"""
 
 
 def is_revenue_receipt(row) -> bool:
@@ -118,7 +142,7 @@ def current_eur_rate() -> dict:
         ).fetchone()
     if row is not None:
         return {
-            "rate": money(row["rate_to_rub"]),
+            "rate": fx_rate(row["rate_to_rub"]),
             "rate_date": row["rate_date"].strftime("%d.%m.%Y"),
             "source": "ЦБ РФ",
         }
@@ -138,7 +162,7 @@ def current_eur_rate() -> dict:
         nominal = Decimal(eur.findtext("Nominal", "1").replace(",", "."))
         value = Decimal(eur.findtext("Value", "0").replace(",", "."))
         payload = {
-            "rate": money(value / nominal),
+            "rate": fx_rate(value / nominal),
             "rate_date": root.attrib.get("Date"),
             "source": "ЦБ РФ",
         }
@@ -781,7 +805,6 @@ def loaded_deals(
     paid_amount_rub: str | None = Query(default=None, max_length=50),
     balance_rub: str | None = Query(default=None, max_length=50),
     balance_eur: float | None = None,
-    eur_rate: float | None = Query(default=None, gt=0),
 ) -> dict:
     conditions = ["d.source = 'buyers'"]
     params: list[object] = []
@@ -832,9 +855,11 @@ def loaded_deals(
             normalized = value.replace(" ", "").replace(",", ".").strip()
             conditions.append(f"cast({expression} as text) ilike %s")
             params.append(ilike_term(normalized))
-    if balance_eur is not None and eur_rate is not None:
-        conditions.append("round(d.balance_rub / %s, 2) = round(%s, 2)")
-        params.extend([eur_rate, balance_eur])
+    if balance_eur is not None:
+        conditions.append(
+            f"round(d.balance_rub / nullif({EUR_RATE_SQL}, 0), 2) = round(%s, 2)"
+        )
+        params.append(balance_eur)
 
     where_sql = f"where {' and '.join(conditions)}"
     offset = (page - 1) * page_size
@@ -855,7 +880,11 @@ def loaded_deals(
             select
                 coalesce(sum(d.planned_revenue_rub), 0) as planned_revenue_rub,
                 coalesce(sum(d.paid_amount_rub), 0) as paid_amount_rub,
-                coalesce(sum(d.balance_rub), 0) as balance_rub
+                coalesce(sum(d.balance_rub), 0) as balance_rub,
+                round(
+                    coalesce(sum(d.balance_rub), 0) / nullif({EUR_RATE_SQL}, 0), 2
+                ) as balance_eur,
+                {EUR_RATE_SQL} as eur_rate
             from deals d
             join counterparties c on c.id = d.customer_id
             left join employees e on e.id = d.manager_id
@@ -877,6 +906,7 @@ def loaded_deals(
                 d.planned_revenue_rub,
                 d.paid_amount_rub,
                 d.balance_rub,
+                round(d.balance_rub / nullif({EUR_RATE_SQL}, 0), 2) as balance_eur,
                 d.financial_status,
                 d.match_status,
                 c.name as customer_name,
@@ -913,6 +943,16 @@ def loaded_deals(
             "planned_revenue_rub": money(totals["planned_revenue_rub"]),
             "paid_amount_rub": money(totals["paid_amount_rub"]),
             "balance_rub": money(totals["balance_rub"]),
+            "balance_eur": (
+                money(totals["balance_eur"])
+                if totals["balance_eur"] is not None
+                else None
+            ),
+            "eur_rate": (
+                fx_rate(totals["eur_rate"])
+                if totals["eur_rate"] is not None
+                else None
+            ),
         },
         "items": [
             {
@@ -928,6 +968,11 @@ def loaded_deals(
                 ),
                 "paid_amount_rub": money(row["paid_amount_rub"]),
                 "balance_rub": money(row["balance_rub"]),
+                "balance_eur": (
+                    money(row["balance_eur"])
+                    if row["balance_eur"] is not None
+                    else None
+                ),
                 "linked_payment_count": row["linked_payment_count"] or 0,
                 "linked_first_payment_date": (
                     row["linked_first_payment_date"].isoformat()
