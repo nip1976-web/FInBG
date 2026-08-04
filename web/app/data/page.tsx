@@ -171,8 +171,12 @@ const eur = (value: number) =>
   new Intl.NumberFormat("ru-RU", {
     style: "currency",
     currency: "EUR",
+    minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   }).format(value);
+
+const decimal = (value: string | number) =>
+  Number(String(value).replace(/\s/g, "").replace(",", "."));
 
 // курс ЦБ — четыре знака после запятой, как публикует банк:
 // округление до копеек искажает пересчёт крупных сумм
@@ -201,6 +205,7 @@ export default function LoadedDataPage() {
   const [payments, setPayments] = useState<PageResponse<Payment> | null>(null);
   const [deals, setDeals] = useState<PageResponse<Deal> | null>(null);
   const [aliases, setAliases] = useState<PageResponse<ClientAlias> | null>(null);
+  const [eurRate, setEurRate] = useState<{ rate: string; rate_date: string } | null>(null);
   const [selectedDealId, setSelectedDealId] = useState<number | null>(null);
   const [dealPayments, setDealPayments] = useState<Record<number, DealPayment[]>>({});
   const [dealPaymentsLoading, setDealPaymentsLoading] = useState<number | null>(null);
@@ -243,6 +248,8 @@ export default function LoadedDataPage() {
   const [newExclusion, setNewExclusion] = useState("");
   const [savingSkipId, setSavingSkipId] = useState<number | null>(null);
   const [search, setSearch] = useState("");
+  const eurRateValue = eurRate ? decimal(eurRate.rate) : Number.NaN;
+  const hasEurRate = Number.isFinite(eurRateValue) && eurRateValue > 0;
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -307,9 +314,9 @@ export default function LoadedDataPage() {
           if (value.trim()) params.set(key, value.trim());
         });
         const balanceEur = Number(dealColumnFilters.balanceEur.replace(",", "."));
-        if (dealColumnFilters.balanceEur.trim() && Number.isFinite(balanceEur)) {
-          // курс подставит сервер: он берёт его из базы, а не из браузера
+        if (dealColumnFilters.balanceEur.trim() && Number.isFinite(balanceEur) && hasEurRate) {
           params.set("balance_eur", String(balanceEur));
+          params.set("eur_rate", String(eurRateValue));
         }
       }
       const rowsResponse = await fetch(
@@ -334,7 +341,7 @@ export default function LoadedDataPage() {
     } finally {
       if (loadAbortRef.current === controller) setLoading(false);
     }
-  }, [dataset, dealFilter, dealColumnFilters, paymentColumnFilters, onlyBitrixMismatch, page, search]);
+  }, [dataset, dealFilter, dealColumnFilters, paymentColumnFilters, onlyBitrixMismatch, hasEurRate, eurRateValue, page, search]);
 
   const loadExclusions = useCallback(async () => {
     try {
@@ -353,6 +360,13 @@ export default function LoadedDataPage() {
     }, 300);
     return () => clearTimeout(timeout);
   }, [load]);
+
+  useEffect(() => {
+    fetch(`${API_URL}/api/reference/eur-rate`)
+      .then((response) => (response.ok ? response.json() : null))
+      .then((payload) => setEurRate(payload as { rate: string; rate_date: string } | null))
+      .catch(() => setEurRate(null));
+  }, []);
 
   useEffect(() => {
     if (dataset !== "payments") return;
@@ -1213,8 +1227,8 @@ export default function LoadedDataPage() {
                           </strong>
                         </td>
                         <td>
-                          <strong>{item.balance_eur !== null ? eur(Number(item.balance_eur)) : "—"}</strong>
-                          {deals?.totals?.eur_rate && <small>ЦБ: {rate(deals.totals.eur_rate)}</small>}
+                          <strong>{hasEurRate ? eur(decimal(item.balance_rub) / eurRateValue) : "—"}</strong>
+                          {hasEurRate && <small>Курс: {eurRateValue.toFixed(4)} ₽</small>}
                         </td>
                       </tr>
                   ))}
@@ -1227,8 +1241,8 @@ export default function LoadedDataPage() {
                       <td />
                       <td>{rub(deals.totals.balance_rub)}</td>
                       <td>
-                        {deals.totals.balance_eur !== null
-                          ? eur(Number(deals.totals.balance_eur))
+                        {hasEurRate
+                          ? eur(decimal(deals.totals.balance_rub) / eurRateValue)
                           : "—"}
                       </td>
                     </tr>
