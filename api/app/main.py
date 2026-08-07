@@ -851,8 +851,15 @@ def loaded_deals(
     paid_amount_rub: str | None = Query(default=None, max_length=50),
     balance_rub: str | None = Query(default=None, max_length=50),
     balance_eur: float | None = None,
+    shipping: Literal["active", "closed"] | None = None,
 ) -> dict:
     conditions = ["d.source = 'buyers'"]
+    if shipping == "active":
+        # рабочий список: незакрытая работа, за которой нужно следить.
+        # Закрытых сделок 273 из 306, и на экране они только мешают
+        conditions.append("d.shipping_status in ('нет', 'отгружен')")
+    elif shipping == "closed":
+        conditions.append("d.shipping_status = 'закрыт'")
     params: list[object] = []
     if financial_status:
         conditions.append("d.financial_status = %s")
@@ -956,6 +963,7 @@ def loaded_deals(
                 bi.currency as invoice_currency,
                 bi.amount as invoice_amount,
                 eur.paid_eur,
+                d.shipping_status,
                 d.financial_status,
                 d.match_status,
                 c.name as customer_name,

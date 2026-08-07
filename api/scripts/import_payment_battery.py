@@ -252,6 +252,22 @@ def main() -> None:
 
         with connection.cursor() as cursor:
             cursor.executemany(insert_sql, rows)
+            # Строки, исключённые вручную. Статус выставляется после вставки, а
+            # не вместо неё: строка остаётся в базе как история, но в платежи не
+            # переводится. Решение человека живёт в отдельной таблице, потому что
+            # загрузчик переписывает статус при каждой заливке и пометку внутри
+            # промежуточных данных попросту стёр бы.
+            cursor.execute(
+                """
+                update staging_payment_operations s
+                set validation_status = 'excluded',
+                    updated_at = now()
+                from payment_row_exclusions e
+                where e.source_sheet = s.source_sheet
+                  and e.source_row = s.source_row
+                  and s.validation_status <> 'excluded'
+                """
+            )
             cursor.execute(
                 """
                 update import_batches

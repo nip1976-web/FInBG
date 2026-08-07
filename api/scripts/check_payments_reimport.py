@@ -38,14 +38,24 @@ def main() -> int:
     arguments = parser.parse_args()
 
     items = json.loads(arguments.input_json.read_text(encoding="utf-8"))
-    incoming = {
-        (item["sheet"], item["excelRow"]): item
-        for item in items
-        if not item.get("excluded")
-    }
-    excluded_count = len(items) - len(incoming)
 
     with psycopg.connect(arguments.database_url, row_factory=dict_row) as connection:
+        # Строки, исключённые вручную: загрузчик их в платежи не переводит,
+        # значит и проверка не должна считать их будущими платежами
+        manual_exclusions = {
+            (row["source_sheet"], row["source_row"])
+            for row in connection.execute(
+                "select source_sheet, source_row from payment_row_exclusions"
+            ).fetchall()
+        }
+        incoming = {
+            (item["sheet"], item["excelRow"]): item
+            for item in items
+            if not item.get("excluded")
+            and (item["sheet"], item["excelRow"]) not in manual_exclusions
+        }
+        excluded_count = len(items) - len(incoming)
+
         existing = {
             (row["source_sheet"], row["source_row"]): row
             for row in connection.execute(

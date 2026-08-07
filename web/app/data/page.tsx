@@ -9,6 +9,7 @@ const API_URL =
 
 type Dataset = "payments" | "deals" | "aliases";
 type DealFilter = "all" | "open" | "closed" | "unmatched";
+type ShippingFilter = "active" | "closed" | "all";
 type DealColumnFilters = {
   customer: string;
   manager: string;
@@ -217,6 +218,8 @@ export default function LoadedDataPage() {
   const [manualSavingPaymentId, setManualSavingPaymentId] = useState<number | null>(null);
   const [manualError, setManualError] = useState("");
   const [dealFilter, setDealFilter] = useState<DealFilter>("all");
+  // по умолчанию рабочий список: закрытых сделок 281 из 307, на экране они мешают
+  const [shippingFilter, setShippingFilter] = useState<ShippingFilter>("active");
   const [dealColumnFilters, setDealColumnFilters] = useState<DealColumnFilters>({
     customer: "",
     manager: "",
@@ -282,6 +285,9 @@ export default function LoadedDataPage() {
       if (dataset === "deals" && dealFilter === "unmatched") {
         params.set("without_match", "true");
       }
+      if (dataset === "deals" && shippingFilter !== "all") {
+        params.set("shipping", shippingFilter);
+      }
       if (dataset === "payments") {
         const paymentParams = {
           payment_date: paymentColumnFilters.paymentDate,
@@ -341,7 +347,7 @@ export default function LoadedDataPage() {
     } finally {
       if (loadAbortRef.current === controller) setLoading(false);
     }
-  }, [dataset, dealFilter, dealColumnFilters, paymentColumnFilters, onlyBitrixMismatch, hasEurRate, eurRateValue, page, search]);
+  }, [dataset, dealFilter, shippingFilter, dealColumnFilters, paymentColumnFilters, onlyBitrixMismatch, hasEurRate, eurRateValue, page, search]);
 
   const loadExclusions = useCallback(async () => {
     try {
@@ -728,6 +734,20 @@ export default function LoadedDataPage() {
                     <option value="open">Открытые</option>
                     <option value="closed">Закрытые</option>
                     <option value="unmatched">Без связи с платежом</option>
+                  </select>
+                </label>
+                <label className="deal-filter">
+                  <span>Отгрузка</span>
+                  <select
+                    value={shippingFilter}
+                    onChange={(event) => {
+                      setShippingFilter(event.target.value as ShippingFilter);
+                      setPage(1);
+                    }}
+                  >
+                    <option value="active">В работе</option>
+                    <option value="closed">Закрытые</option>
+                    <option value="all">Все</option>
                   </select>
                 </label>
                 <span className="dataset-count">

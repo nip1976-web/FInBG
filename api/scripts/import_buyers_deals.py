@@ -148,7 +148,23 @@ def main() -> None:
         unmatched = 0
         seen_deal_numbers: list[str] = []
 
+        # Строки, исключённые вручную: решение человека живёт отдельно от файла,
+        # иначе перезаливка вернула бы удалённое уже через минуту.
+        excluded_rows = {
+            row["source_row"]
+            for row in connection.execute(
+                """
+                select source_row from deal_row_exclusions
+                where source_sheet = 'СчетаРуб'
+                """
+            ).fetchall()
+        }
+        skipped_excluded = 0
+
         for item in items:
+            if item.get("excelRow") in excluded_rows:
+                skipped_excluded += 1
+                continue
             customer = text(item["customer"])
             if customer is None:
                 continue
@@ -501,6 +517,7 @@ def main() -> None:
             {
                 "batch_id": batch_id,
                 "rows": len(items),
+                "excluded_rows": skipped_excluded,
                 "customers": len(customer_ids),
                 "managers": len(
                     [value for value in manager_ids.values() if value]

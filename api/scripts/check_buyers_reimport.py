@@ -149,11 +149,24 @@ def main() -> int:
             ).fetchall()
         }
 
+        # Строки, исключённые вручную: загрузчик их пропускает, значит и
+        # проверка не должна считать их будущими сделками
+        excluded_rows = {
+            row["source_row"]
+            for row in connection.execute(
+                "select source_row from deal_row_exclusions where source_sheet = 'СчетаРуб'"
+            ).fetchall()
+        }
+
         new_customers: dict[str, int] = {}
         file_keys: set[str] = set()
         unresolved_rows = 0
+        skipped_excluded = 0
 
         for item in items:
+            if item.get("excelRow") in excluded_rows:
+                skipped_excluded += 1
+                continue
             customer = text(item.get("customer"))
             if customer is None:
                 unresolved_rows += 1
@@ -189,6 +202,8 @@ def main() -> int:
     print(f"строк в файле: {len(items)}, сделок в базе: {len(existing)}")
     if unresolved_rows:
         print(f"строк без покупателя (загрузчик их пропустит): {unresolved_rows}")
+    if skipped_excluded:
+        print(f"строк исключено вручную: {skipped_excluded}")
     print("=" * 70)
     print(f"опознаются как те же сделки:  {len(matched)}")
     print(f"будут заведены как новые:     {len(created)}")
