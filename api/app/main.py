@@ -1016,7 +1016,9 @@ def loaded_deals(
         "items": [
             {
                 **dict(row),
-                "opened_on": row["opened_on"].isoformat(),
+                "opened_on": (
+                    row["opened_on"].isoformat() if row["opened_on"] else None
+                ),
                 "payment_date": (
                     row["payment_date"].isoformat()
                     if row["payment_date"]

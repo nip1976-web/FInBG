@@ -80,7 +80,7 @@ type Deal = {
   customer_name: string;
   original_document_type: string | null;
   original_document_number: string | null;
-  opened_on: string;
+  opened_on: string | null;
   payment_date: string | null;
   planned_revenue_rub: string;
   paid_amount_rub: string;

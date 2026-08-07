@@ -128,12 +128,23 @@ def main() -> int:
         for position, field in mapping.items():
             record[field] = row[position - 1] if position <= len(row) else None
 
-        if not as_text(record.get("customer")):
+        customer = as_text(record.get("customer"))
+        if not customer or customer.strip().lower().startswith("итого"):
+            # в листе есть итоговая строка «Итого:» на 85 млн ₽ — покупателем
+            # она не является, а по правилу «незакрытые берём всегда» попала бы
+            # в базу отдельной сделкой
             skipped_no_customer += 1
             continue
 
         payment_date = as_date(record.get("paymentDate"))
-        if payment_date is None or date.fromisoformat(payment_date) < since:
+        shipping = (as_text(record.get("shippingStatus")) or "").strip().lower()
+        # Незакрытые по отгрузке берём всегда, независимо от даты оплаты.
+        # Сделка, которую ещё не оплатили, даты оплаты не имеет вовсе, а сделка
+        # 2025 года с остатком ждёт денег в этом году — обе нужны в работе.
+        # Отбор только по дате оплаты отсекал ровно тех, у кого есть долг.
+        in_work = shipping in ("нет", "отгружен")
+        in_period = payment_date is not None and date.fromisoformat(payment_date) >= since
+        if not in_period and not in_work:
             skipped_by_period += 1
             continue
 

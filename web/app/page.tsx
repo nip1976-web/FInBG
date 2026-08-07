@@ -24,34 +24,44 @@ const formatRub = (value: string | undefined) =>
     maximumFractionDigits: 0,
   }).format(Number(value ?? 0));
 
-const periods = {
-  month: {
-    label: "Июль 2026",
-    revenue: "8 420 000 ₽",
-    profit: "1 184 000 ₽",
-    margin: "14,1%",
-    cash: "3 276 400 ₽",
-    inflow: "8,42 млн",
-    outflow: "7,24 млн",
-  },
-  quarter: {
-    label: "2 квартал 2026",
-    revenue: "23 870 000 ₽",
-    profit: "3 116 000 ₽",
-    margin: "13,1%",
-    cash: "3 276 400 ₽",
-    inflow: "23,87 млн",
-    outflow: "20,75 млн",
-  },
-  year: {
-    label: "2026 год",
-    revenue: "49 310 000 ₽",
-    profit: "6 842 000 ₽",
-    margin: "13,9%",
-    cash: "3 276 400 ₽",
-    inflow: "49,31 млн",
-    outflow: "42,47 млн",
-  },
+type PeriodKey = "month" | "quarter" | "year" | "all";
+
+const MONTHS = [
+  "январь", "февраль", "март", "апрель", "май", "июнь",
+  "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь",
+];
+
+const iso = (value: Date) => value.toISOString().slice(0, 10);
+
+// Границы периода считаются от сегодняшнего дня, а не зашиты в страницу:
+// раньше кнопки переключали выдуманные числа, а живая цифра приходила одна
+// и без периода — с загрузкой платежей за прошлые годы это стало заметно.
+const periodRange = (key: PeriodKey, today: Date) => {
+  const year = today.getFullYear();
+  if (key === "all") {
+    return { from: null, to: null, label: "За всё время" };
+  }
+  if (key === "year") {
+    return {
+      from: iso(new Date(Date.UTC(year, 0, 1))),
+      to: iso(new Date(Date.UTC(year, 11, 31))),
+      label: `${year} год`,
+    };
+  }
+  if (key === "quarter") {
+    const quarter = Math.floor(today.getMonth() / 3);
+    return {
+      from: iso(new Date(Date.UTC(year, quarter * 3, 1))),
+      to: iso(new Date(Date.UTC(year, quarter * 3 + 3, 0))),
+      label: `${quarter + 1} квартал ${year}`,
+    };
+  }
+  const month = today.getMonth();
+  return {
+    from: iso(new Date(Date.UTC(year, month, 1))),
+    to: iso(new Date(Date.UTC(year, month + 1, 0))),
+    label: `${MONTHS[month]} ${year}`,
+  };
 };
 
 const cashBars = [
@@ -64,15 +74,19 @@ const cashBars = [
 ];
 
 export default function Home() {
-  const [period, setPeriod] = useState<keyof typeof periods>("month");
+  const [period, setPeriod] = useState<PeriodKey>("year");
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [apiConnected, setApiConnected] = useState(false);
-  const data = useMemo(() => periods[period], [period]);
+  const data = useMemo(() => periodRange(period, new Date()), [period]);
 
   useEffect(() => {
     const controller = new AbortController();
+    const params = new URLSearchParams();
+    if (data.from) params.set("date_from", data.from);
+    if (data.to) params.set("date_to", data.to);
+    const query = params.toString();
 
-    fetch(`${API_URL}/api/dashboard/summary`, {
+    fetch(`${API_URL}/api/dashboard/summary${query ? `?${query}` : ""}`, {
       signal: controller.signal,
     })
       .then((response) => {
@@ -88,7 +102,7 @@ export default function Home() {
       });
 
     return () => controller.abort();
-  }, []);
+  }, [data.from, data.to]);
 
   return (
     <main className="app-shell">
@@ -107,13 +121,12 @@ export default function Home() {
             <select
               aria-label="Период отчёта"
               value={period}
-              onChange={(event) =>
-                setPeriod(event.target.value as keyof typeof periods)
-              }
+              onChange={(event) => setPeriod(event.target.value as PeriodKey)}
             >
               <option value="month">Месяц</option>
               <option value="quarter">Квартал</option>
               <option value="year">Год</option>
+              <option value="all">За всё время</option>
             </select>
             <button className="primary-button" type="button">
               + Новая операция
@@ -123,38 +136,36 @@ export default function Home() {
 
         <div className="context-line">
           <span>{data.label}</span>
-          <span>Обновлено сегодня, 19:42</span>
+          <span>
+            {data.from ? `с ${data.from} по ${data.to}` : "без ограничения по дате"}
+          </span>
         </div>
 
         <section className="metrics" aria-label="Ключевые показатели">
           <article className="metric-card featured">
             <div className="metric-heading">
-              <span>Деньги сейчас</span>
-              <span className="trend positive">+6,8%</span>
+              <span>Поступило за период</span>
             </div>
-            <strong>{formatRub(summary?.cash_balance_rub)}</strong>
+            <strong>{formatRub(summary?.inflow_rub)}</strong>
             <p>Хольц, ИП и наличные</p>
           </article>
           <article className="metric-card">
             <div className="metric-heading">
-              <span>Выручка</span>
-              <span className="trend positive">+12,4%</span>
+              <span>Поступило за всё время</span>
             </div>
-            <strong>{formatRub(summary?.revenue_rub)}</strong>
-            <p>по данным PostgreSQL</p>
+            <strong>{formatRub(summary?.cash_balance_rub)}</strong>
+            <p>всё, что загружено в базу</p>
           </article>
           <article className="metric-card">
             <div className="metric-heading">
               <span>Прибыль</span>
-              <span className="trend positive">+9,1%</span>
             </div>
             <strong>—</strong>
-            <p>рассчитаем после импорта сделок</p>
+            <p>считать не из чего: расходы не загружены</p>
           </article>
           <article className="metric-card">
             <div className="metric-heading">
               <span>К получению</span>
-              <span className="trend warning">3 просрочено</span>
             </div>
             <strong>{formatRub(summary?.receivables_rub)}</strong>
             <p>дебиторская задолженность</p>
