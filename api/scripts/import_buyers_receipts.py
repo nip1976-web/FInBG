@@ -87,7 +87,15 @@ def main() -> None:
         updated = 0
         total = Decimal("0")
 
+        skipped_zero = 0
         for item in receipts:
+            # Аннулированная строка: суммы обнулены, а в пояснении написано
+            # почему. Оплатой это не является, и таблица оплат её не принимает —
+            # там стоит проверка «сумма больше нуля». Пропускаем, а не ломаем
+            # загрузку и не ослабляем проверку: нулевая оплата бессмысленна.
+            if Decimal(str(item.get("paidAmount") or 0)) <= 0:
+                skipped_zero += 1
+                continue
             source_key = canonical_hash(
                 {
                     "source_path": args.source_path,
@@ -170,11 +178,15 @@ def main() -> None:
             """
             update import_batches
             set imported_rows = %(rows)s,
-                skipped_rows = 0,
+                skipped_rows = %(skipped)s,
                 status = 'completed'
             where id = %(batch_id)s
             """,
-            {"rows": len(receipts), "batch_id": batch_id},
+            {
+                "rows": len(receipts) - skipped_zero,
+                "skipped": skipped_zero,
+                "batch_id": batch_id,
+            },
         )
 
     print(
