@@ -40,6 +40,11 @@ SHEETS = {
 COLUMNS = {
     "№": "sequence",
     "плательщик": "counterparty",
+    # ИНН плательщика: Николай вносит его с августа 2026. Принимаем несколько
+    # написаний заголовка, чтобы колонку не пришлось называть строго определённо
+    "инн": "payerTaxId",
+    "инн плательщика": "payerTaxId",
+    "инн клиента": "payerTaxId",
     "сумма": "amount",
     "пояснение": "explanation",
     "основание оплаты": "basis",
@@ -148,6 +153,7 @@ def main() -> int:
                     "sequence": as_text(record.get("sequence")),
                     "account": as_text(record.get("account")),
                     "counterparty": as_text(record.get("counterparty")),
+                    "payerTaxId": as_text(record.get("payerTaxId")),
                     "amount": amount,
                     "date": operation_date,
                     "rawDate": as_text(record.get("date")),
