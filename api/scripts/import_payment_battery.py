@@ -231,7 +231,16 @@ def main() -> None:
                     "possible_duplicate": duplicate_counts[
                         duplicate_key(item)
                     ] > 1,
-                    "validation_status": "error" if errors else "pending",
+                    # «excluded» — строка не той статьи поступлений: заносим её
+                    # ради истории, но в платежи не переводим. Снятие своих
+                    # денег в кассу выручкой не является, а выбросить строку
+                    # совсем — значит через месяц не вспомнить, была она в файле
+                    # или нет. Перенос такие строки пропускает.
+                    "validation_status": (
+                        "error" if errors
+                        else "excluded" if item.get("excluded")
+                        else "pending"
+                    ),
                     "validation_errors": Jsonb(errors),
                     "source_payload": Jsonb(item),
                 }
