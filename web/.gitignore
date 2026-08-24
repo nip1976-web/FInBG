@@ -40,3 +40,6 @@ next-env.d.ts
 /.wrangler/
 /outputs/
 /work/
+
+# кэш проверки типов, появляется после tsc --noEmit
+*.tsbuildinfo

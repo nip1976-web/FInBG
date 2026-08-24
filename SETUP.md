@@ -104,6 +104,34 @@ netstat -ano | findstr LISTENING | findstr ":5173 :8000"
 **Правки в коде на сервер сами не попадают.** Пока не скопировали и не
 перезапустили службу — на сервере работает старое.
 
+## Как прогнать проверки
+
+Обе команды ничего не меняют: ни базу, ни файлы. Прогонять после правок в коде.
+
+**Интерфейс** — три проверки, все из каталога `C:\dev\finbg\web`:
+
+```powershell
+$node='C:\Users\admin\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe'
+& $node --test tests\rendered-html.test.mjs
+& $node node_modules\typescript\bin\tsc --noEmit
+& $node node_modules\eslint\bin\eslint.js . --ignore-pattern dist --ignore-pattern .next --ignore-pattern node_modules.old-2026-07-31
+```
+
+Последнюю строку без `--ignore-pattern node_modules.old-2026-07-31` запускать
+бесполезно: проверка полезет в забытую копию библиотек от 31.07.2026 и выдаст
+почти три тысячи чужих замечаний. Ту папку стоит удалить, тогда сгодится и
+`npm run lint`.
+
+**Сервер** — разбор назначения платежа, зависимостей и базы не требует:
+
+```bash
+scp -r api VPS:/tmp/api_repo
+ssh VPS "/opt/finbg/venv/bin/python -m unittest discover -s /tmp/api_repo/tests -v"
+```
+
+На компьютере Python не установлен, поэтому проверка гоняется на сервере тем же
+интерпретатором, что крутит API.
+
 ## GitHub
 
 Репозиторий: `git@github.com:nip1976-web/FInBG.git`, основная ветка `main`.
