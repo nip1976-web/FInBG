@@ -7,7 +7,8 @@
 * платёж пришёл от того же клиента, что стоит в сделке (сверка по названию,
   форма собственности и кавычки отбрасываются);
 * в назначении платежа назван номер счёта или спецификации именно этой сделки;
-* сумма всех таких платежей сходится с оплатой из файла Buyers до копейки.
+* сумма таких платежей вместе с уже стоящими привязками сделки сходится с
+  оплатой из файла Buyers до копейки.
 
 Третье условие и делает привязку безопасной при отношении «многие ко многим»:
 на счёт часто приходит несколько платежей, и совпадение итога — свидетельство,
@@ -49,7 +50,14 @@ def normalize_name(value: object) -> str:
 
 
 def same_client(deal_key: str, payment_key: str) -> bool:
-    return bool(deal_key and payment_key and (deal_key in payment_key or payment_key in deal_key))
+    """Только точное совпадение имени, без вхождения одного в другое.
+
+    Вхождение обманывает на коротких названиях: «АС ООО» и «ДОК ООО» после
+    отбрасывания формы собственности дают «ас» и «док», а они сидят внутри
+    «аспэк ефимовский» и «павловский док». Платежи чужих клиентов попадали в
+    список кандидатов.
+    """
+    return bool(deal_key) and deal_key == payment_key
 
 
 def main() -> int:
@@ -63,7 +71,12 @@ def main() -> int:
             """
             select d.id, c.name as customer, d.original_document_type as document_type,
                    d.original_document_number as document_number,
-                   d.source_payload->>'paidAmount' as file_paid
+                   d.source_payload->>'paidAmount' as file_paid,
+                   coalesce((
+                       select sum(a.allocated_amount_rub)
+                       from payment_allocations a
+                       where a.deal_id = d.id
+                   ), 0) as already_linked
             from deals d
             join counterparties c on c.id = d.customer_id
             where d.source = 'buyers'
@@ -108,7 +121,10 @@ def main() -> int:
             else:
                 hits = []
             if file_paid > 0 and hits:
-                if sum((p["amount_rub"] for p in hits), Decimal(0)) == file_paid:
+                # уже стоящие привязки - часть той же оплаты: у сделки может быть
+                # ручная привязка на часть суммы, и без неё итог никогда не сойдётся
+                found = deal["already_linked"] + sum((p["amount_rub"] for p in hits), Decimal(0))
+                if found == file_paid:
                     plan.append((deal, hits))
 
         claimed: dict[int, int] = {}
