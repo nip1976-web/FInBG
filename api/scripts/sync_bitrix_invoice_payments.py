@@ -39,6 +39,20 @@ PAID_MONEY_FIELD = "ufCrmSmartInvoiceFinbgPaidMoney"
 BALANCE_MONEY_FIELD = "ufCrmSmartInvoiceFinbgBalanceMoney"
 BATCH_SIZE = 50
 CENT = Decimal("0.01")
+# Переплата меньше одной единицы валюты счёта - шум пересчёта, а не деньги
+# сверх счёта: платёж в рублях переводится в евро по курсу ЦБ с четырьмя
+# знаками, и сумма частей расходится со счётом на копейки (было 0,01-0,17).
+# Настоящие переплаты начинаются с десятков рублей - их по-прежнему разносит
+# человек.
+OVERPAYMENT_TOLERANCE = Decimal("1.00")
+
+
+def settle(invoice_total: Decimal, paid: Decimal) -> Decimal | None:
+    """Остаток по счёту, или None, если оплачено заметно больше счёта."""
+    difference = (invoice_total - paid).quantize(CENT, rounding=ROUND_HALF_UP)
+    if difference < -OVERPAYMENT_TOLERANCE:
+        return None
+    return Decimal("0.00") if difference <= CENT else difference
 
 
 def load_env(path: str) -> None:
@@ -294,8 +308,8 @@ def main() -> int:
                 continue
             paid = sum((row["credited_amount"] for row in credited_payments), Decimal("0"))
             paid = paid.quantize(CENT, rounding=ROUND_HALF_UP)
-            difference = (invoice_total - paid).quantize(CENT, rounding=ROUND_HALF_UP)
-            if difference < 0:
+            balance = settle(invoice_total, paid)
+            if balance is None:
                 skipped.append(
                     {
                         "invoice_id": invoice_id,
@@ -305,7 +319,6 @@ def main() -> int:
                     }
                 )
                 continue
-            balance = Decimal("0.00") if abs(difference) <= CENT else difference
             changes.append(
                 {
                     "invoice_id": invoice_id,
