@@ -18,7 +18,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
-from sync_bitrix_invoice_payments import settle, split_shares, vat_topup  # noqa: E402
+from sync_bitrix_invoice_payments import (  # noqa: E402
+    manual_split,
+    settle,
+    split_shares,
+    vat_topup,
+)
 
 D = Decimal
 
@@ -119,6 +124,52 @@ class ДелениеПлатежаМеждуСчетами(unittest.TestCase):
     def test_пустой_счёт_в_списке_останавливает(self):
         # счёт с нулевой суммой в Bitrix (как 257) делить не по чему
         self.assertIsNone(split_shares(D("60000.00"), [D("60000.00"), D("0.00")]))
+
+
+class РучноеДеление(unittest.TestCase):
+    """Счета и суммы называет человек, но сойтись они обязаны так же."""
+
+    @staticmethod
+    def платёж(amount: str) -> dict:
+        return {"id": 1955, "amount_rub": D(amount), "amount": D(amount), "currency": "RUB"}
+
+    @staticmethod
+    def доли(*pairs) -> list[dict]:
+        return [{"bitrix_invoice_id": number, "amount_rub": D(amount)} for number, amount in pairs]
+
+    def test_промлес_четыре_счёта_с_частичной_долей(self):
+        # #1955: 1991 и 1947 названы, 1597 - «задолженность» с карточки-двойника,
+        # 1727 оплачен частью: 13 140 из 16 080
+        parts = manual_split(
+            self.платёж("412014.00"),
+            self.доли((1991, "7224.00"), (1947, "314250.00"), (1597, "77400.00"), (1727, "13140.00")),
+        )
+        self.assertIsNotNone(parts)
+        self.assertEqual([number for number, _ in parts], [1991, 1947, 1597, 1727])
+        self.assertEqual([share["amount_rub"] for _, share in parts],
+                         [D("7224.00"), D("314250.00"), D("77400.00"), D("13140.00")])
+
+    def test_каждая_доля_знает_весь_платёж(self):
+        # в комментарий Bitrix идёт и доля, и сумма всей платёжки
+        parts = manual_split(self.платёж("230234.00"), self.доли((741, "163734.00"), (745, "66500.00")))
+        for _, share in parts:
+            self.assertEqual(share["split_total_rub"], D("230234.00"))
+            self.assertEqual(share["split_invoices"], [741, 745])
+
+    def test_описка_в_сумме_не_проходит(self):
+        self.assertIsNone(
+            manual_split(self.платёж("63460.00"), self.доли((1131, "15800.00"), (869, "42800.00")))
+        )
+
+    def test_копейка_расхождения_прощается(self):
+        self.assertIsNotNone(
+            manual_split(self.платёж("100.00"), self.доли((1, "60.00"), (2, "41.00")))
+        )
+
+    def test_один_счёт_тоже_можно(self):
+        # человек вправе назвать и один счёт - это просто перевод платежа
+        parts = manual_split(self.платёж("63000.00"), self.доли((2899, "63000.00")))
+        self.assertEqual([number for number, _ in parts], [2899])
 
 
 if __name__ == "__main__":

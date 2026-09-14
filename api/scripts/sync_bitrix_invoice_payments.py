@@ -135,6 +135,43 @@ def split_payment(
     return parts
 
 
+def manual_split(payment: dict, shares: list[dict]) -> list[tuple[int, dict]] | None:
+    """Платёж, расписанный по счетам рукой человека, или None, если не сошлось.
+
+    Программа делит сама, только когда суммы названных счетов складываются в
+    платёж целиком. Этого хватает не всегда: номер бывает написан так, что его
+    не прочесть («по счету 741 от 745В»), счёт бывает не назван вовсе, а иногда
+    одна из долей - частичная оплата счёта. Тогда счета и суммы называет
+    человек.
+
+    Проверка остаётся прежней и здесь: доли обязаны сложиться в платёж до
+    копейки. Описка в сумме не пройдёт молча - платёж уйдёт в отчёт.
+    """
+    amount_rub = Decimal(str(payment["amount_rub"]))
+    total = sum((Decimal(str(share["amount_rub"])) for share in shares), Decimal("0"))
+    if abs(amount_rub - total).quantize(CENT, rounding=ROUND_HALF_UP) > ROUNDING_TOLERANCE:
+        return None
+
+    payment_currency = str(payment["currency"]).strip()
+    invoices = [int(share["bitrix_invoice_id"]) for share in shares]
+    parts: list[tuple[int, dict]] = []
+    for share in shares:
+        share_rub = Decimal(str(share["amount_rub"]))
+        part = dict(payment)
+        part["amount_rub"] = share_rub
+        part["amount"] = (
+            share_rub
+            if payment_currency == "RUB"
+            else (Decimal(str(payment["amount"])) * share_rub / amount_rub).quantize(
+                CENT, rounding=ROUND_HALF_UP
+            )
+        )
+        part["split_total_rub"] = amount_rub
+        part["split_invoices"] = invoices
+        parts.append((int(share["bitrix_invoice_id"]), part))
+    return parts
+
+
 def invoice_matching_amount(
     connection, payment: dict, numbers: list[int], live_invoices: dict[int, dict]
 ) -> int | None:
@@ -426,12 +463,25 @@ def main() -> int:
                 payment.raw_counterparty,
                 payment.description,
                 assignment.bitrix_invoice_id
-            from payment_manager_assignments assignment
-            join payments payment on payment.id = assignment.payment_id
+            from payments payment
+            left join payment_manager_assignments assignment
+              on assignment.payment_id = payment.id
             where payment.source = 'payment_battery'
               and payment.direction = 'inflow'
               and payment.status = 'posted'
               and not payment.is_internal_transfer
+              -- платёж берём, если менеджер привязал его к счёту или человек
+              -- расписал его по счетам руками; второе бывает и без первого
+              and (
+                  assignment.bitrix_invoice_id is not null
+                  or exists (
+                      select 1 from payment_invoice_splits split
+                      where split.payment_id = payment.id
+                  )
+              )
+              and not exists (
+                  select 1 from payment_bitrix_skips skip where skip.payment_id = payment.id
+              )
               {invoice_filter}
             order by assignment.bitrix_invoice_id, payment.payment_date, payment.id
             """,
@@ -447,6 +497,17 @@ def main() -> int:
             )
         }
 
+        # Ручное деление платежа по счетам: счета и суммы называет человек.
+        manual_splits: dict[int, list[dict]] = defaultdict(list)
+        for row in connection.execute(
+            """
+            select payment_id, bitrix_invoice_id, amount_rub
+            from payment_invoice_splits
+            order by payment_id, bitrix_invoice_id
+            """
+        ):
+            manual_splits[int(row["payment_id"])].append(row)
+
         # Номера из назначения спрашиваем у самого Bitrix, а не у местной
         # таблицы счетов: она держит не все - счета 1053 и 1051, которые
         # закрыты той же платёжкой, что и 1057, в ней отсутствуют, и платёж
@@ -457,8 +518,17 @@ def main() -> int:
         live_invoices = read_live_invoices(
             webhook,
             sorted(
-                {int(payment["bitrix_invoice_id"]) for payment in payments}
+                {
+                    int(payment["bitrix_invoice_id"])
+                    for payment in payments
+                    if payment["bitrix_invoice_id"] is not None
+                }
                 | {number for numbers in parsed_by_payment.values() for number in numbers}
+                | {
+                    int(share["bitrix_invoice_id"])
+                    for shares in manual_splits.values()
+                    for share in shares
+                }
             ),
         )
         referenced_by_payment = {
@@ -470,6 +540,37 @@ def main() -> int:
         unsplit_payments: list[dict] = []
         splits: list[dict] = []
         for payment in payments:
+            shares = manual_splits.get(payment["id"])
+            if shares:
+                parts = manual_split(payment, shares)
+                if parts is None:
+                    unsplit_payments.append(
+                        {
+                            "payment_id": payment["id"],
+                            "amount": money(Decimal(str(payment["amount_rub"]))),
+                            "named_invoices": [int(s["bitrix_invoice_id"]) for s in shares],
+                            "credited_to": payment["bitrix_invoice_id"],
+                            "reason": "ручное деление не сходится с суммой платежа",
+                        }
+                    )
+                    if payment["bitrix_invoice_id"] is not None:
+                        grouped[int(payment["bitrix_invoice_id"])].append(payment)
+                    continue
+                splits.append(
+                    {
+                        "payment_id": payment["id"],
+                        "amount": money(Decimal(str(payment["amount_rub"]))),
+                        "by_hand": True,
+                        "invoices": [
+                            {"invoice_id": invoice_id, "share": money(share["amount_rub"])}
+                            for invoice_id, share in parts
+                        ],
+                    }
+                )
+                for invoice_id, share in parts:
+                    grouped[invoice_id].append(share)
+                continue
+
             referenced = referenced_by_payment[payment["id"]]
             if len(set(referenced)) > 1:
                 parts = split_payment(connection, payment, referenced, live_invoices)
@@ -506,7 +607,8 @@ def main() -> int:
                 for invoice_id, share in parts:
                     grouped[invoice_id].append(share)
                 continue
-            grouped[int(payment["bitrix_invoice_id"])].append(payment)
+            if payment["bitrix_invoice_id"] is not None:
+                grouped[int(payment["bitrix_invoice_id"])].append(payment)
 
         invoice_ids = sorted(grouped)
         changes: list[dict] = []
