@@ -16,7 +16,7 @@ import urllib.parse
 import urllib.request
 from collections import defaultdict
 from datetime import date
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 
 import psycopg
@@ -39,20 +39,52 @@ PAID_MONEY_FIELD = "ufCrmSmartInvoiceFinbgPaidMoney"
 BALANCE_MONEY_FIELD = "ufCrmSmartInvoiceFinbgBalanceMoney"
 BATCH_SIZE = 50
 CENT = Decimal("0.01")
-# Переплата меньше одной единицы валюты счёта - шум пересчёта, а не деньги
-# сверх счёта: платёж в рублях переводится в евро по курсу ЦБ с четырьмя
-# знаками, и сумма частей расходится со счётом на копейки (было 0,01-0,17).
-# Настоящие переплаты начинаются с десятков рублей - их по-прежнему разносит
-# человек.
-OVERPAYMENT_TOLERANCE = Decimal("1.00")
+# Расхождение до двух единиц валюты счёта в любую сторону - округление, а не
+# деньги: клиент платит рубли по курсу, округлённому до копеек, и каждый платёж
+# округляется сам по себе. Такой счёт считаем закрытым, всё что больше - разбор
+# человека, промежуточной зоны нет. Правило Николая от 14.09.2026; до него
+# допуск был 1.00 и только на переплату, из-за чего счёт, закрытый двумя
+# платежами, не сходился на 1,80 EUR и висел неоплаченным.
+ROUNDING_TOLERANCE = Decimal("2.00")
+# С 2026 года НДС вырос с 20% до 22%. Счёт, выставленный по ставке 20%, клиент
+# оплачивает с доплатой разницы: сумма × 1,22 / 1,20, то есть ровно на
+# «счёт × 2/120» больше. Это полная оплата, а не переплата.
+VAT_TOPUP_SHARE = Decimal("2") / Decimal("120")
+# Налог в счёте сидит внутри суммы: при ставке 20% это ровно её шестая часть.
+# По этой доле и узнаём, что счёт выставлен ещё по старой ставке - дата счёта
+# не годится, счёт 3065 выставлен 10.01.2026 и всё равно с НДС 20%.
+VAT_20_SHARE = Decimal("1") / Decimal("6")
+# Раньше этого дня доплачивать было нечего, ставка не менялась.
+VAT_CHANGE_DATE = date(2026, 1, 1)
 
 
 def settle(invoice_total: Decimal, paid: Decimal) -> Decimal | None:
     """Остаток по счёту, или None, если оплачено заметно больше счёта."""
     difference = (invoice_total - paid).quantize(CENT, rounding=ROUND_HALF_UP)
-    if difference < -OVERPAYMENT_TOLERANCE:
+    if difference < -ROUNDING_TOLERANCE:
         return None
-    return Decimal("0.00") if difference <= CENT else difference
+    return Decimal("0.00") if difference <= ROUNDING_TOLERANCE else difference
+
+
+def tax_value_of(invoice: dict) -> Decimal | None:
+    """Сумма налога из карточки счёта. Пусто и мусор читаем как «неизвестно»."""
+    raw = invoice.get("taxValue")
+    if raw in (None, ""):
+        return None
+    try:
+        return Decimal(str(raw))
+    except InvalidOperation:
+        return None
+
+
+def vat_topup(invoice_total: Decimal, tax_value: Decimal | None) -> Decimal | None:
+    """Доплата НДС по счёту, выставленному по ставке 20%, или None."""
+    if tax_value is None or invoice_total <= 0:
+        return None
+    expected_tax = (invoice_total * VAT_20_SHARE).quantize(CENT, rounding=ROUND_HALF_UP)
+    if abs(tax_value - expected_tax) > CENT:
+        return None
+    return (invoice_total * VAT_TOPUP_SHARE).quantize(CENT, rounding=ROUND_HALF_UP)
 
 
 def load_env(path: str) -> None:
@@ -130,7 +162,7 @@ def read_live_invoices(webhook: str, ids: list[int]) -> dict[int, dict]:
             {
                 "entityTypeId": ENTITY_TYPE_ID,
                 "filter": {"@id": chunk},
-                "select": ["id", "opportunity", "currencyId", "stageId"],
+                "select": ["id", "opportunity", "currencyId", "stageId", "taxValue"],
             },
         )
         for item in result.get("items", []):
@@ -308,7 +340,22 @@ def main() -> int:
                 continue
             paid = sum((row["credited_amount"] for row in credited_payments), Decimal("0"))
             paid = paid.quantize(CENT, rounding=ROUND_HALF_UP)
+            paid_total = invoice_total
+            topup = Decimal("0.00")
             balance = settle(invoice_total, paid)
+            if balance is None:
+                # Может быть, лишнее - это доплата НДС, а не переплата. Считаем
+                # так, только если она закрывает счёт ровно: частичную доплату
+                # признавать нельзя, иначе остаток придётся выдумывать.
+                excess = (paid - invoice_total).quantize(CENT, rounding=ROUND_HALF_UP)
+                expected = vat_topup(invoice_total, tax_value_of(invoice))
+                paid_after_change = any(
+                    row["payment_date"] >= VAT_CHANGE_DATE for row in credited_payments
+                )
+                if expected is not None and paid_after_change and abs(excess - expected) <= ROUNDING_TOLERANCE:
+                    topup = expected
+                    paid_total = invoice_total + topup
+                    balance = Decimal("0.00")
             if balance is None:
                 skipped.append(
                     {
@@ -316,6 +363,9 @@ def main() -> int:
                         "reason": "overpayment_requires_allocation",
                         "invoice_total": money(invoice_total),
                         "paid": money(paid),
+                        "overpayment": money(
+                            (paid - invoice_total).quantize(CENT, rounding=ROUND_HALF_UP)
+                        ),
                     }
                 )
                 continue
@@ -330,6 +380,14 @@ def main() -> int:
                     "last_payment_date": max(row["payment_date"] for row in credited_payments),
                     "stage_id": PAID_STAGE if balance == 0 else PARTIAL_STAGE,
                     "payments": credited_payments,
+                    # сколько списано на округление: плюс - клиент недодал,
+                    # минус - переплатил. Ноль значит сошлось само, без допуска.
+                    # Считаем от суммы, которую клиент должен был заплатить: со
+                    # счётом по старой ставке это счёт плюс доплата НДС
+                    "rounded_off": (paid_total - paid).quantize(CENT, rounding=ROUND_HALF_UP)
+                    if balance == 0
+                    else Decimal("0.00"),
+                    "vat_topup": topup,
                 }
             )
 
@@ -340,6 +398,16 @@ def main() -> int:
             "invoices_ready": len(changes),
             "fully_paid": sum(change["balance"] == 0 for change in changes),
             "partially_paid": sum(change["balance"] > 0 for change in changes),
+            "vat_topups": [
+                {
+                    "invoice_id": change["invoice_id"],
+                    "invoice_total": money(change["invoice_total"]),
+                    "topup": money(change["vat_topup"]),
+                    "paid": money(change["paid"]),
+                }
+                for change in changes
+                if change["vat_topup"] > 0
+            ],
             "skipped": skipped,
             "preview": [
                 {
@@ -349,6 +417,8 @@ def main() -> int:
                     "balance": money(change["balance"]),
                     "payment_count": change["payment_count"],
                     "stage_id": change["stage_id"],
+                    "rounded_off": money(change["rounded_off"]),
+                    "vat_topup": money(change["vat_topup"]),
                 }
                 for change in changes
             ],
