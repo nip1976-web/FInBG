@@ -374,11 +374,14 @@ def add_payment_comment(webhook: str, invoice_id: int, payment: dict, change: di
             "Статус: " + ("оплачен полностью" if change["balance"] == 0 else "частично оплачен"),
         ]
     )
-    if change.get("accepted_overpayment", Decimal("0")) > 0:
+    accepted = change.get("accepted_overpayment", Decimal("0"))
+    if accepted > 0:
         lines.append(
-            "Переплата "
-            + display_money(change["accepted_overpayment"], currency)
-            + " принята решением: счёт закрыт"
+            "Переплата " + display_money(accepted, currency) + " принята решением: счёт закрыт"
+        )
+    elif accepted < 0:
+        lines.append(
+            "Недоплата " + display_money(-accepted, currency) + " прощена решением: счёт закрыт"
         )
     return bitrix_call(
         webhook,
@@ -434,9 +437,10 @@ def main() -> int:
             """,
             params,
         ).fetchall()
-        # Переплаты, принятые человеком по одному счёту: клиент посчитал рубли
-        # по своему курсу и дал на несколько евро больше, а счёт закрыт.
-        accepted_overpayments = {
+        # Расхождения, принятые человеком по одному счёту: плюс - переплата
+        # (клиент посчитал по своему курсу и дал больше), минус - прощённая
+        # недоплата. И то и другое значит «счёт закрыт, деньги не ищем».
+        accepted_differences = {
             int(row["bitrix_invoice_id"]): Decimal(str(row["accepted_amount"]))
             for row in connection.execute(
                 "select bitrix_invoice_id, accepted_amount from bitrix_accepted_overpayments"
@@ -558,11 +562,19 @@ def main() -> int:
                     # Переплата, принятая человеком по этому счёту. Сверяем с
                     # суммой решения: пришли новые деньги сверх неё - счёт
                     # снова на разбор, решение касалось прежних.
-                    accepted = accepted_overpayments.get(invoice_id)
-                    if accepted is not None and excess <= accepted + ROUNDING_TOLERANCE:
+                    accepted = accepted_differences.get(invoice_id)
+                    if accepted is not None and 0 < accepted and excess <= accepted + ROUNDING_TOLERANCE:
                         accepted_excess = excess
                         paid_total = paid
                         balance = Decimal("0.00")
+            if balance is not None and balance > 0:
+                # Недоплата, прощённая человеком: клиент недодал, и этих денег
+                # не ждут. Больше прощённого - остаток показываем как есть.
+                forgiven = accepted_differences.get(invoice_id)
+                if forgiven is not None and forgiven < 0 and balance <= -forgiven + ROUNDING_TOLERANCE:
+                    accepted_excess = -balance
+                    paid_total = paid
+                    balance = Decimal("0.00")
             if balance is None:
                 skipped.append(
                     {
