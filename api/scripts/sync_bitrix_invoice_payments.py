@@ -25,6 +25,7 @@ from psycopg.rows import dict_row
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.documents import invoice_numbers  # noqa: E402
+from app.payment_terms import stated_amounts, stated_rates  # noqa: E402
 
 
 ENTITY_TYPE_ID = 31
@@ -56,6 +57,12 @@ VAT_TOPUP_SHARE = Decimal("2") / Decimal("120")
 VAT_20_SHARE = Decimal("1") / Decimal("6")
 # Раньше этого дня доплачивать было нечего, ставка не менялась.
 VAT_CHANGE_DATE = date(2026, 1, 1)
+# Насколько курс, названный плательщиком, может отойти от курса ЦБ, чтобы ему
+# ещё верить. Договорная надбавка и курс соседней даты укладываются в единицы
+# процентов; чужое число из назначения промахивается в разы.
+STATED_TERMS_TOLERANCE = Decimal("0.15")
+STATED_SOURCE = "назначение платежа"
+CBR_SOURCE = "ЦБ РФ на дату платежа"
 
 
 def settle(invoice_total: Decimal, paid: Decimal) -> Decimal | None:
@@ -274,17 +281,44 @@ def rate_for(connection, currency: str, payment_date: date) -> Decimal | None:
     return Decimal(str(row["rate_to_rub"])) if row else None
 
 
+def credited_by_statement(
+    description: str | None, amount_rub: Decimal, cbr_rate: Decimal
+) -> tuple[Decimal, Decimal] | None:
+    """Сколько валюты плательщик назвал сам: (сумма, курс) или None.
+
+    Сумму в евро предпочитаем курсу - это прямая цифра клиента, а не наш
+    пересчёт. Каждого кандидата сверяем с курсом ЦБ: договорная надбавка и
+    курс другой даты дают единицы процентов, а случайное число из назначения
+    (сумма другой спецификации, обрывок даты) - разы.
+    """
+    if cbr_rate <= 0 or amount_rub <= 0:
+        return None
+    for amount in stated_amounts(description):
+        implied = amount_rub / amount
+        if abs(implied / cbr_rate - 1) <= STATED_TERMS_TOLERANCE:
+            return amount.quantize(CENT, rounding=ROUND_HALF_UP), implied
+    for rate in stated_rates(description):
+        if abs(rate / cbr_rate - 1) <= STATED_TERMS_TOLERANCE:
+            return (amount_rub / rate).quantize(CENT, rounding=ROUND_HALF_UP), rate
+    return None
+
+
 def amount_in_invoice_currency(connection, payment: dict, currency: str):
+    """(зачтено в валюте счёта, курс, чей курс) - или (None, None, None)."""
     payment_currency = str(payment["currency"]).strip()
     if payment_currency == currency:
-        return Decimal(str(payment["amount"])), None
+        return Decimal(str(payment["amount"])), None, None
     if payment_currency == "RUB":
         rate = rate_for(connection, currency, payment["payment_date"])
         if rate is None:
-            return None, None
-        converted = Decimal(str(payment["amount_rub"])) / rate
-        return converted.quantize(CENT, rounding=ROUND_HALF_UP), rate
-    return None, None
+            return None, None, None
+        amount_rub = Decimal(str(payment["amount_rub"]))
+        stated = credited_by_statement(payment["description"], amount_rub, rate)
+        if stated is not None:
+            credited, used = stated
+            return credited, used, STATED_SOURCE
+        return (amount_rub / rate).quantize(CENT, rounding=ROUND_HALF_UP), rate, CBR_SOURCE
+    return None, None, None
 
 
 def existing_comment_markers(webhook: str, invoice_id: int) -> str:
@@ -325,7 +359,13 @@ def add_payment_comment(webhook: str, invoice_id: int, payment: dict, change: di
     if currency != "RUB":
         lines.append(f"Поступило: {display_money(Decimal(str(payment['amount_rub'])), 'RUB')}")
         if payment["rate"] is not None:
-            lines.append(f"Курс ЦБ РФ на дату платежа: {payment['rate']:.4f} ₽")
+            source = payment.get("rate_source") or CBR_SOURCE
+            label = (
+                "Курс из назначения платежа"
+                if source == STATED_SOURCE
+                else "Курс ЦБ РФ на дату платежа"
+            )
+            lines.append(f"{label}: {payment['rate']:.4f} ₽")
     lines.extend(
         [
             f"Назначение: {payment['description'] or '—'}",
@@ -466,13 +506,16 @@ def main() -> int:
             credited_payments: list[dict] = []
             conversion_failed = False
             for payment in grouped[invoice_id]:
-                credited, rate = amount_in_invoice_currency(connection, payment, currency)
+                credited, rate, rate_source = amount_in_invoice_currency(
+                    connection, payment, currency
+                )
                 if credited is None:
                     conversion_failed = True
                     break
                 enriched = dict(payment)
                 enriched["credited_amount"] = credited
                 enriched["rate"] = rate
+                enriched["rate_source"] = rate_source
                 credited_payments.append(enriched)
             if conversion_failed:
                 skipped.append({"invoice_id": invoice_id, "reason": "missing_rate_or_currency_conversion"})
