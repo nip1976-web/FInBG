@@ -18,7 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
-from sync_bitrix_invoice_payments import settle, vat_topup  # noqa: E402
+from sync_bitrix_invoice_payments import settle, split_shares, vat_topup  # noqa: E402
 
 D = Decimal
 
@@ -87,6 +87,38 @@ class ДоплатаНДС(unittest.TestCase):
     def test_без_налога_в_карточке_не_гадаем(self):
         self.assertIsNone(vat_topup(D("1000.00"), None))
         self.assertIsNone(vat_topup(D("0.00"), D("0.00")))
+
+
+class ДелениеПлатежаМеждуСчетами(unittest.TestCase):
+    """Одной платёжкой закрывают несколько счетов; делим, только если сходится."""
+
+    def test_профлес_три_счёта_одной_платёжкой(self):
+        # #1467: 142 920 = 27 960 (счёт 1057) + 72 144 (1053) + 42 816 (1051)
+        totals = [D("27960.00"), D("72144.00"), D("42816.00")]
+        self.assertEqual(split_shares(D("142920.00"), totals), totals)
+
+    def test_союзбалткомплект_два_счёта(self):
+        # #1930: 121 200 = 58 800 (счёт 1981) + 62 400 (1989)
+        totals = [D("58800.00"), D("62400.00")]
+        self.assertEqual(split_shares(D("121200.00"), totals), totals)
+
+    def test_копейка_расхождения_не_мешает(self):
+        # пересчёт валютного счёта в рубли даёт копеечный хвост
+        self.assertIsNotNone(split_shares(D("100001.50"), [D("60000.00"), D("40000.00")]))
+
+    def test_не_сходится_значит_человеку(self):
+        # #1501: 63 460 против 15 800 + 42 800 - недостаёт 4 860, делить нельзя
+        self.assertIsNone(split_shares(D("63460.00"), [D("15800.00"), D("42800.00")]))
+
+    def test_платёж_больше_суммы_счетов_тоже_человеку(self):
+        self.assertIsNone(split_shares(D("200000.00"), [D("60000.00"), D("40000.00")]))
+
+    def test_один_счёт_не_делится(self):
+        self.assertIsNone(split_shares(D("27960.00"), [D("27960.00")]))
+
+    def test_пустой_счёт_в_списке_останавливает(self):
+        # счёт с нулевой суммой в Bitrix (как 257) делить не по чему
+        self.assertIsNone(split_shares(D("60000.00"), [D("60000.00"), D("0.00")]))
 
 
 if __name__ == "__main__":
