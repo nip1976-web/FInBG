@@ -374,6 +374,12 @@ def add_payment_comment(webhook: str, invoice_id: int, payment: dict, change: di
             "Статус: " + ("оплачен полностью" if change["balance"] == 0 else "частично оплачен"),
         ]
     )
+    if change.get("accepted_overpayment", Decimal("0")) > 0:
+        lines.append(
+            "Переплата "
+            + display_money(change["accepted_overpayment"], currency)
+            + " принята решением: счёт закрыт"
+        )
     return bitrix_call(
         webhook,
         "crm.timeline.comment.add",
@@ -428,6 +434,15 @@ def main() -> int:
             """,
             params,
         ).fetchall()
+        # Переплаты, принятые человеком по одному счёту: клиент посчитал рубли
+        # по своему курсу и дал на несколько евро больше, а счёт закрыт.
+        accepted_overpayments = {
+            int(row["bitrix_invoice_id"]): Decimal(str(row["accepted_amount"]))
+            for row in connection.execute(
+                "select bitrix_invoice_id, accepted_amount from bitrix_accepted_overpayments"
+            )
+        }
+
         # Номера из назначения спрашиваем у самого Bitrix, а не у местной
         # таблицы счетов: она держит не все - счета 1053 и 1051, которые
         # закрыты той же платёжкой, что и 1057, в ней отсутствуют, и платёж
@@ -524,6 +539,7 @@ def main() -> int:
             paid = paid.quantize(CENT, rounding=ROUND_HALF_UP)
             paid_total = invoice_total
             topup = Decimal("0.00")
+            accepted_excess = Decimal("0.00")
             balance = settle(invoice_total, paid)
             if balance is None:
                 # Может быть, лишнее - это доплата НДС, а не переплата. Считаем
@@ -538,6 +554,15 @@ def main() -> int:
                     topup = expected
                     paid_total = invoice_total + topup
                     balance = Decimal("0.00")
+                else:
+                    # Переплата, принятая человеком по этому счёту. Сверяем с
+                    # суммой решения: пришли новые деньги сверх неё - счёт
+                    # снова на разбор, решение касалось прежних.
+                    accepted = accepted_overpayments.get(invoice_id)
+                    if accepted is not None and excess <= accepted + ROUNDING_TOLERANCE:
+                        accepted_excess = excess
+                        paid_total = paid
+                        balance = Decimal("0.00")
             if balance is None:
                 skipped.append(
                     {
@@ -570,6 +595,7 @@ def main() -> int:
                     if balance == 0
                     else Decimal("0.00"),
                     "vat_topup": topup,
+                    "accepted_overpayment": accepted_excess,
                 }
             )
 
@@ -602,6 +628,7 @@ def main() -> int:
                     "stage_id": change["stage_id"],
                     "rounded_off": money(change["rounded_off"]),
                     "vat_topup": money(change["vat_topup"]),
+                    "accepted_overpayment": money(change["accepted_overpayment"]),
                 }
                 for change in changes
             ],
