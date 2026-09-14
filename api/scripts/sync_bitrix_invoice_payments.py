@@ -41,15 +41,11 @@ BATCH_SIZE = 50
 CENT = Decimal("0.01")
 # Расхождение до двух единиц валюты счёта в любую сторону - округление, а не
 # деньги: клиент платит рубли по курсу, округлённому до копеек, и каждый платёж
-# округляется сам по себе. Такой счёт считаем закрытым. Правило Николая от
-# 14.09.2026; до него допуск был 1.00 и только на переплату, из-за чего счёт,
-# закрытый двумя платежами, не сходился на 1,80 EUR и висел неоплаченным.
+# округляется сам по себе. Такой счёт считаем закрытым, всё что больше - разбор
+# человека, промежуточной зоны нет. Правило Николая от 14.09.2026; до него
+# допуск был 1.00 и только на переплату, из-за чего счёт, закрытый двумя
+# платежами, не сходился на 1,80 EUR и висел неоплаченным.
 ROUNDING_TOLERANCE = Decimal("2.00")
-# Переплата больше трёх единиц валюты счёта - на разбор человеком: такие деньги
-# объясняются не округлением, а зачётом в другую спецификацию или возвратом.
-# Что попало между допуском и этим порогом, в Bitrix не пишем, но и в разбор не
-# зовём - в отчёте это отдельная строка.
-REVIEW_THRESHOLD = Decimal("3.00")
 
 
 def settle(invoice_total: Decimal, paid: Decimal) -> Decimal | None:
@@ -315,18 +311,15 @@ def main() -> int:
             paid = paid.quantize(CENT, rounding=ROUND_HALF_UP)
             balance = settle(invoice_total, paid)
             if balance is None:
-                overpayment = (paid - invoice_total).quantize(CENT, rounding=ROUND_HALF_UP)
                 skipped.append(
                     {
                         "invoice_id": invoice_id,
-                        "reason": (
-                            "overpayment_small_rounding"
-                            if overpayment <= REVIEW_THRESHOLD
-                            else "overpayment_requires_allocation"
-                        ),
+                        "reason": "overpayment_requires_allocation",
                         "invoice_total": money(invoice_total),
                         "paid": money(paid),
-                        "overpayment": money(overpayment),
+                        "overpayment": money(
+                            (paid - invoice_total).quantize(CENT, rounding=ROUND_HALF_UP)
+                        ),
                     }
                 )
                 continue
@@ -341,6 +334,11 @@ def main() -> int:
                     "last_payment_date": max(row["payment_date"] for row in credited_payments),
                     "stage_id": PAID_STAGE if balance == 0 else PARTIAL_STAGE,
                     "payments": credited_payments,
+                    # сколько списано на округление: плюс - клиент недодал,
+                    # минус - переплатил. Ноль значит сошлось само, без допуска
+                    "rounded_off": (invoice_total - paid).quantize(CENT, rounding=ROUND_HALF_UP)
+                    if balance == 0
+                    else Decimal("0.00"),
                 }
             )
 
@@ -360,6 +358,7 @@ def main() -> int:
                     "balance": money(change["balance"]),
                     "payment_count": change["payment_count"],
                     "stage_id": change["stage_id"],
+                    "rounded_off": money(change["rounded_off"]),
                 }
                 for change in changes
             ],
