@@ -34,16 +34,55 @@ SPEC_RE = re.compile(
     rf"\b(?:спец[а-яё]*|сп)\.?{_FILLER}(\d{{1,10}}){_NOT_A_DATE}\b",
     re.IGNORECASE,
 )
+# Одной платёжкой закрывают несколько счетов и перечисляют их через запятую:
+# «по счетам 1395, 1401», «№ 1377, 1381, 1409», «№1453 от 15.11.2024, №1613 от
+# 24.12.2024». Слово «счёт» при этом стоит один раз, поэтому список продолжаем
+# вручную - вплотную за уже найденным номером и только через запятую или точку
+# с запятой. Пробела мало: «по счету 1469 по договору 12/05» и «счёт 1234 в
+# т.ч. НДС 20%» тогда притащили бы чужие числа.
+_INVOICE_DATE_TAIL = r"(?:\s*от\s*\d{1,2}\.\d{1,2}\.\d{2,4}\s*г?\.?)?"
+# Два знака и больше: одна цифра после запятой - это почти всегда количество
+# («3777, 2 шт»), а не номер счёта.
+_MORE_INVOICES_RE = re.compile(
+    rf"{_INVOICE_DATE_TAIL}\s*[,;]\s*(?:и\s+)?(?:№|N|#)?\s*(\d{{2,10}}){_NOT_A_DATE}\b",
+    re.IGNORECASE,
+)
 DOC_DATE_RE = re.compile(r"\d{1,2}\.\d{1,2}\.\d{2,4}")
 # How far past the number to look for its date ("№3799 от 07.07.2026").
 DOC_DATE_WINDOW = 20
 
 
+# «Оплата 30% по счет фактуре N133 ... Сч 781» - счёт-фактуру пишут и через
+# пробел, и тогда короткое «сч» проскакивает мимо запрета выше: остаётся «ет
+# фактуре N» внутри прокладки. Номер налогового документа в Bitrix существует
+# и принадлежит чужому клиенту, поэтому такие совпадения отбрасываем целиком.
+_FACTURA_RE = re.compile(r"фактур", re.IGNORECASE)
+
+
+def _invoice_matches(description: str):
+    for match in INVOICE_RE.finditer(description):
+        if _FACTURA_RE.search(match.group(0)):
+            continue
+        yield match
+
+
 def invoice_numbers(description: str | None) -> list[int]:
-    """Every счёт number mentioned, in order of appearance, deduplicated."""
+    """Every счёт number mentioned, in order of appearance, deduplicated.
+
+    Списки продолжаются за найденным номером: «по счетам 1395, 1401» - это два
+    счёта, а не один. Пока читался только первый, платёж целиком ложился на
+    него, счёт числился переплаченным, а второй - неоплаченным.
+    """
     if not description:
         return []
-    return list(dict.fromkeys(int(value) for value in INVOICE_RE.findall(description)))
+    found: list[str] = []
+    for match in _invoice_matches(description):
+        found.append(match.group(1))
+        position = match.end()
+        while (more := _MORE_INVOICES_RE.match(description, position)) is not None:
+            found.append(more.group(1))
+            position = more.end()
+    return list(dict.fromkeys(int(value) for value in found))
 
 
 def invoice_number(description: str | None) -> int | None:
@@ -57,7 +96,10 @@ SPEC_KIND = "spec"
 
 
 def _first_document(pattern: re.Pattern, description: str, kind: str) -> tuple[str, str, str | None] | None:
-    match = pattern.search(description)
+    if kind == INVOICE_KIND:
+        match = next(_invoice_matches(description), None)
+    else:
+        match = pattern.search(description)
     if not match:
         return None
     date_match = DOC_DATE_RE.search(description, match.end(), match.end() + DOC_DATE_WINDOW)

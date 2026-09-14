@@ -25,6 +25,7 @@ from psycopg.rows import dict_row
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.documents import invoice_numbers  # noqa: E402
+from app.payment_terms import stated_amounts, stated_rates  # noqa: E402
 
 
 ENTITY_TYPE_ID = 31
@@ -56,6 +57,12 @@ VAT_TOPUP_SHARE = Decimal("2") / Decimal("120")
 VAT_20_SHARE = Decimal("1") / Decimal("6")
 # Раньше этого дня доплачивать было нечего, ставка не менялась.
 VAT_CHANGE_DATE = date(2026, 1, 1)
+# Насколько курс, названный плательщиком, может отойти от курса ЦБ, чтобы ему
+# ещё верить. Договорная надбавка и курс соседней даты укладываются в единицы
+# процентов; чужое число из назначения промахивается в разы.
+STATED_TERMS_TOLERANCE = Decimal("0.15")
+STATED_SOURCE = "назначение платежа"
+CBR_SOURCE = "ЦБ РФ на дату платежа"
 
 
 def settle(invoice_total: Decimal, paid: Decimal) -> Decimal | None:
@@ -64,6 +71,131 @@ def settle(invoice_total: Decimal, paid: Decimal) -> Decimal | None:
     if difference < -ROUNDING_TOLERANCE:
         return None
     return Decimal("0.00") if difference <= ROUNDING_TOLERANCE else difference
+
+
+def split_shares(payment_amount: Decimal, invoice_totals: list[Decimal]) -> list[Decimal] | None:
+    """Доли платежа по счетам, если он закрывает их все разом, иначе None.
+
+    Одной платёжкой часто закрывают два-три счёта и перечисляют их в
+    назначении: «по счетам 1395, 1401». Делим только тогда, когда суммы
+    названных счетов складываются в платёж, - делёж доказывает сам себя, как
+    совпадение в евро доказывало спорные сделки. Не сошлось - разносит
+    человек: гадать, какую часть платежа отнести к какому счёту, программа не
+    должна.
+    """
+    if len(invoice_totals) < 2 or any(total <= 0 for total in invoice_totals):
+        return None
+    difference = (payment_amount - sum(invoice_totals)).quantize(CENT, rounding=ROUND_HALF_UP)
+    if abs(difference) > ROUNDING_TOLERANCE:
+        return None
+    return invoice_totals
+
+
+def split_payment(
+    connection, payment: dict, numbers: list[int], live_invoices: dict[int, dict]
+) -> list[tuple[int, dict]] | None:
+    """Платёж, разложенный по названным счетам, или None, если делить не по чему.
+
+    Каждому счёту достаётся его собственная сумма - в рублях платежа, по курсу
+    ЦБ на дату платежа для валютных счетов.
+    """
+    amount_rub = Decimal(str(payment["amount_rub"]))
+    ordered = list(dict.fromkeys(numbers))
+    totals: list[Decimal] = []
+    for number in ordered:
+        invoice = live_invoices.get(number)
+        if invoice is None:
+            return None
+        currency = str(invoice.get("currencyId") or "").strip()
+        rate = rate_for(connection, currency, payment["payment_date"])
+        if rate is None:
+            return None
+        total = Decimal(str(invoice.get("opportunity") or "0"))
+        totals.append((total * rate).quantize(CENT, rounding=ROUND_HALF_UP))
+
+    shares = split_shares(amount_rub, totals)
+    if shares is None:
+        return None
+
+    payment_currency = str(payment["currency"]).strip()
+    parts: list[tuple[int, dict]] = []
+    for number, share_rub in zip(ordered, shares):
+        part = dict(payment)
+        part["amount_rub"] = share_rub
+        part["amount"] = (
+            share_rub
+            if payment_currency == "RUB"
+            else (Decimal(str(payment["amount"])) * share_rub / amount_rub).quantize(
+                CENT, rounding=ROUND_HALF_UP
+            )
+        )
+        part["split_total_rub"] = amount_rub
+        part["split_invoices"] = ordered
+        parts.append((number, part))
+    return parts
+
+
+def manual_split(payment: dict, shares: list[dict]) -> list[tuple[int, dict]] | None:
+    """Платёж, расписанный по счетам рукой человека, или None, если не сошлось.
+
+    Программа делит сама, только когда суммы названных счетов складываются в
+    платёж целиком. Этого хватает не всегда: номер бывает написан так, что его
+    не прочесть («по счету 741 от 745В»), счёт бывает не назван вовсе, а иногда
+    одна из долей - частичная оплата счёта. Тогда счета и суммы называет
+    человек.
+
+    Проверка остаётся прежней и здесь: доли обязаны сложиться в платёж до
+    копейки. Описка в сумме не пройдёт молча - платёж уйдёт в отчёт.
+    """
+    amount_rub = Decimal(str(payment["amount_rub"]))
+    total = sum((Decimal(str(share["amount_rub"])) for share in shares), Decimal("0"))
+    if abs(amount_rub - total).quantize(CENT, rounding=ROUND_HALF_UP) > ROUNDING_TOLERANCE:
+        return None
+
+    payment_currency = str(payment["currency"]).strip()
+    invoices = [int(share["bitrix_invoice_id"]) for share in shares]
+    parts: list[tuple[int, dict]] = []
+    for share in shares:
+        share_rub = Decimal(str(share["amount_rub"]))
+        part = dict(payment)
+        part["amount_rub"] = share_rub
+        part["amount"] = (
+            share_rub
+            if payment_currency == "RUB"
+            else (Decimal(str(payment["amount"])) * share_rub / amount_rub).quantize(
+                CENT, rounding=ROUND_HALF_UP
+            )
+        )
+        part["split_total_rub"] = amount_rub
+        part["split_invoices"] = invoices
+        parts.append((int(share["bitrix_invoice_id"]), part))
+    return parts
+
+
+def invoice_matching_amount(
+    connection, payment: dict, numbers: list[int], live_invoices: dict[int, dict]
+) -> int | None:
+    """Единственный из названных счетов, чья сумма равна платежу, иначе None.
+
+    «Оплата по счету №2955 ..., счет №2957 ...» - клиент назвал оба счёта в
+    обеих платёжках, но одна равна первому счёту, вторая второму. Совпадение
+    до копейки и решает, где чьи деньги.
+    """
+    amount_rub = Decimal(str(payment["amount_rub"]))
+    exact: list[int] = []
+    for number in dict.fromkeys(numbers):
+        invoice = live_invoices.get(number)
+        if invoice is None:
+            continue
+        rate = rate_for(connection, str(invoice.get("currencyId") or "").strip(), payment["payment_date"])
+        if rate is None:
+            continue
+        total = (Decimal(str(invoice.get("opportunity") or "0")) * rate).quantize(
+            CENT, rounding=ROUND_HALF_UP
+        )
+        if total > 0 and abs(amount_rub - total) <= ROUNDING_TOLERANCE:
+            exact.append(number)
+    return exact[0] if len(exact) == 1 else None
 
 
 def tax_value_of(invoice: dict) -> Decimal | None:
@@ -186,17 +318,44 @@ def rate_for(connection, currency: str, payment_date: date) -> Decimal | None:
     return Decimal(str(row["rate_to_rub"])) if row else None
 
 
+def credited_by_statement(
+    description: str | None, amount_rub: Decimal, cbr_rate: Decimal
+) -> tuple[Decimal, Decimal] | None:
+    """Сколько валюты плательщик назвал сам: (сумма, курс) или None.
+
+    Сумму в евро предпочитаем курсу - это прямая цифра клиента, а не наш
+    пересчёт. Каждого кандидата сверяем с курсом ЦБ: договорная надбавка и
+    курс другой даты дают единицы процентов, а случайное число из назначения
+    (сумма другой спецификации, обрывок даты) - разы.
+    """
+    if cbr_rate <= 0 or amount_rub <= 0:
+        return None
+    for amount in stated_amounts(description):
+        implied = amount_rub / amount
+        if abs(implied / cbr_rate - 1) <= STATED_TERMS_TOLERANCE:
+            return amount.quantize(CENT, rounding=ROUND_HALF_UP), implied
+    for rate in stated_rates(description):
+        if abs(rate / cbr_rate - 1) <= STATED_TERMS_TOLERANCE:
+            return (amount_rub / rate).quantize(CENT, rounding=ROUND_HALF_UP), rate
+    return None
+
+
 def amount_in_invoice_currency(connection, payment: dict, currency: str):
+    """(зачтено в валюте счёта, курс, чей курс) - или (None, None, None)."""
     payment_currency = str(payment["currency"]).strip()
     if payment_currency == currency:
-        return Decimal(str(payment["amount"])), None
+        return Decimal(str(payment["amount"])), None, None
     if payment_currency == "RUB":
         rate = rate_for(connection, currency, payment["payment_date"])
         if rate is None:
-            return None, None
-        converted = Decimal(str(payment["amount_rub"])) / rate
-        return converted.quantize(CENT, rounding=ROUND_HALF_UP), rate
-    return None, None
+            return None, None, None
+        amount_rub = Decimal(str(payment["amount_rub"]))
+        stated = credited_by_statement(payment["description"], amount_rub, rate)
+        if stated is not None:
+            credited, used = stated
+            return credited, used, STATED_SOURCE
+        return (amount_rub / rate).quantize(CENT, rounding=ROUND_HALF_UP), rate, CBR_SOURCE
+    return None, None, None
 
 
 def existing_comment_markers(webhook: str, invoice_id: int) -> str:
@@ -225,10 +384,25 @@ def add_payment_comment(webhook: str, invoice_id: int, payment: dict, change: di
         f"Дата оплаты: {payment['payment_date'].strftime('%d.%m.%Y')}",
         f"Зачтено в счёт: {display_money(credited, currency)}",
     ]
+    if payment.get("split_total_rub") is not None:
+        others = ", ".join(
+            str(number) for number in payment["split_invoices"] if number != invoice_id
+        )
+        lines.append(
+            f"Часть платежа: всего поступило "
+            f"{display_money(payment['split_total_rub'], 'RUB')}, "
+            f"этой платёжкой закрыты также счета {others}"
+        )
     if currency != "RUB":
         lines.append(f"Поступило: {display_money(Decimal(str(payment['amount_rub'])), 'RUB')}")
         if payment["rate"] is not None:
-            lines.append(f"Курс ЦБ РФ на дату платежа: {payment['rate']:.4f} ₽")
+            source = payment.get("rate_source") or CBR_SOURCE
+            label = (
+                "Курс из назначения платежа"
+                if source == STATED_SOURCE
+                else "Курс ЦБ РФ на дату платежа"
+            )
+            lines.append(f"{label}: {payment['rate']:.4f} ₽")
     lines.extend(
         [
             f"Назначение: {payment['description'] or '—'}",
@@ -237,6 +411,15 @@ def add_payment_comment(webhook: str, invoice_id: int, payment: dict, change: di
             "Статус: " + ("оплачен полностью" if change["balance"] == 0 else "частично оплачен"),
         ]
     )
+    accepted = change.get("accepted_overpayment", Decimal("0"))
+    if accepted > 0:
+        lines.append(
+            "Переплата " + display_money(accepted, currency) + " принята решением: счёт закрыт"
+        )
+    elif accepted < 0:
+        lines.append(
+            "Недоплата " + display_money(-accepted, currency) + " прощена решением: счёт закрыт"
+        )
     return bitrix_call(
         webhook,
         "crm.timeline.comment.add",
@@ -280,37 +463,154 @@ def main() -> int:
                 payment.raw_counterparty,
                 payment.description,
                 assignment.bitrix_invoice_id
-            from payment_manager_assignments assignment
-            join payments payment on payment.id = assignment.payment_id
+            from payments payment
+            left join payment_manager_assignments assignment
+              on assignment.payment_id = payment.id
             where payment.source = 'payment_battery'
               and payment.direction = 'inflow'
               and payment.status = 'posted'
               and not payment.is_internal_transfer
+              -- платёж берём, если менеджер привязал его к счёту или человек
+              -- расписал его по счетам руками; второе бывает и без первого
+              and (
+                  assignment.bitrix_invoice_id is not null
+                  or exists (
+                      select 1 from payment_invoice_splits split
+                      where split.payment_id = payment.id
+                  )
+              )
+              and not exists (
+                  select 1 from payment_bitrix_skips skip where skip.payment_id = payment.id
+              )
               {invoice_filter}
             order by assignment.bitrix_invoice_id, payment.payment_date, payment.id
             """,
             params,
         ).fetchall()
-        known_invoice_ids = {
-            int(row["bitrix_invoice_id"])
-            for row in connection.execute("select bitrix_invoice_id from bitrix_invoices")
+        # Расхождения, принятые человеком по одному счёту: плюс - переплата
+        # (клиент посчитал по своему курсу и дал больше), минус - прощённая
+        # недоплата. И то и другое значит «счёт закрыт, деньги не ищем».
+        accepted_differences = {
+            int(row["bitrix_invoice_id"]): Decimal(str(row["accepted_amount"]))
+            for row in connection.execute(
+                "select bitrix_invoice_id, accepted_amount from bitrix_accepted_overpayments"
+            )
+        }
+
+        # Ручное деление платежа по счетам: счета и суммы называет человек.
+        manual_splits: dict[int, list[dict]] = defaultdict(list)
+        for row in connection.execute(
+            """
+            select payment_id, bitrix_invoice_id, amount_rub
+            from payment_invoice_splits
+            order by payment_id, bitrix_invoice_id
+            """
+        ):
+            manual_splits[int(row["payment_id"])].append(row)
+
+        # Номера из назначения спрашиваем у самого Bitrix, а не у местной
+        # таблицы счетов: она держит не все - счета 1053 и 1051, которые
+        # закрыты той же платёжкой, что и 1057, в ней отсутствуют, и платёж
+        # молча оставался неделимым. Несуществующий номер просто не вернётся.
+        parsed_by_payment = {
+            payment["id"]: invoice_numbers(payment["description"]) for payment in payments
+        }
+        live_invoices = read_live_invoices(
+            webhook,
+            sorted(
+                {
+                    int(payment["bitrix_invoice_id"])
+                    for payment in payments
+                    if payment["bitrix_invoice_id"] is not None
+                }
+                | {number for numbers in parsed_by_payment.values() for number in numbers}
+                | {
+                    int(share["bitrix_invoice_id"])
+                    for shares in manual_splits.values()
+                    for share in shares
+                }
+            ),
+        )
+        referenced_by_payment = {
+            payment_id: [number for number in numbers if number in live_invoices]
+            for payment_id, numbers in parsed_by_payment.items()
         }
 
         grouped: dict[int, list[dict]] = defaultdict(list)
-        ambiguous_payment_ids: list[int] = []
+        unsplit_payments: list[dict] = []
+        splits: list[dict] = []
         for payment in payments:
-            referenced = [
-                number
-                for number in invoice_numbers(payment["description"])
-                if number in known_invoice_ids
-            ]
-            if len(set(referenced)) > 1:
-                ambiguous_payment_ids.append(payment["id"])
+            shares = manual_splits.get(payment["id"])
+            if shares:
+                parts = manual_split(payment, shares)
+                if parts is None:
+                    unsplit_payments.append(
+                        {
+                            "payment_id": payment["id"],
+                            "amount": money(Decimal(str(payment["amount_rub"]))),
+                            "named_invoices": [int(s["bitrix_invoice_id"]) for s in shares],
+                            "credited_to": payment["bitrix_invoice_id"],
+                            "reason": "ручное деление не сходится с суммой платежа",
+                        }
+                    )
+                    if payment["bitrix_invoice_id"] is not None:
+                        grouped[int(payment["bitrix_invoice_id"])].append(payment)
+                    continue
+                splits.append(
+                    {
+                        "payment_id": payment["id"],
+                        "amount": money(Decimal(str(payment["amount_rub"]))),
+                        "by_hand": True,
+                        "invoices": [
+                            {"invoice_id": invoice_id, "share": money(share["amount_rub"])}
+                            for invoice_id, share in parts
+                        ],
+                    }
+                )
+                for invoice_id, share in parts:
+                    grouped[invoice_id].append(share)
                 continue
-            grouped[int(payment["bitrix_invoice_id"])].append(payment)
+
+            referenced = referenced_by_payment[payment["id"]]
+            if len(set(referenced)) > 1:
+                parts = split_payment(connection, payment, referenced, live_invoices)
+                if parts is None:
+                    # Поделить не вышло. Тогда - счёт, которому платёж равен до
+                    # копейки, а если и такого нет, остаёмся при том счёте, что
+                    # проставил менеджер: это прежнее поведение, и деньги хотя
+                    # бы не пропадают из выгрузки. Платёж попадает в отчёт,
+                    # чтобы человек посмотрел.
+                    single = invoice_matching_amount(
+                        connection, payment, referenced, live_invoices
+                    )
+                    unsplit_payments.append(
+                        {
+                            "payment_id": payment["id"],
+                            "amount": money(Decimal(str(payment["amount_rub"]))),
+                            "named_invoices": sorted(set(referenced)),
+                            "credited_to": single or int(payment["bitrix_invoice_id"]),
+                            "reason": "сумма счёта совпала" if single else "зачтён по привязке менеджера",
+                        }
+                    )
+                    grouped[single or int(payment["bitrix_invoice_id"])].append(payment)
+                    continue
+                splits.append(
+                    {
+                        "payment_id": payment["id"],
+                        "amount": money(Decimal(str(payment["amount_rub"]))),
+                        "invoices": [
+                            {"invoice_id": invoice_id, "share": money(share["amount_rub"])}
+                            for invoice_id, share in parts
+                        ],
+                    }
+                )
+                for invoice_id, share in parts:
+                    grouped[invoice_id].append(share)
+                continue
+            if payment["bitrix_invoice_id"] is not None:
+                grouped[int(payment["bitrix_invoice_id"])].append(payment)
 
         invoice_ids = sorted(grouped)
-        live_invoices = read_live_invoices(webhook, invoice_ids)
         changes: list[dict] = []
         skipped: list[dict] = []
 
@@ -327,13 +627,16 @@ def main() -> int:
             credited_payments: list[dict] = []
             conversion_failed = False
             for payment in grouped[invoice_id]:
-                credited, rate = amount_in_invoice_currency(connection, payment, currency)
+                credited, rate, rate_source = amount_in_invoice_currency(
+                    connection, payment, currency
+                )
                 if credited is None:
                     conversion_failed = True
                     break
                 enriched = dict(payment)
                 enriched["credited_amount"] = credited
                 enriched["rate"] = rate
+                enriched["rate_source"] = rate_source
                 credited_payments.append(enriched)
             if conversion_failed:
                 skipped.append({"invoice_id": invoice_id, "reason": "missing_rate_or_currency_conversion"})
@@ -342,6 +645,7 @@ def main() -> int:
             paid = paid.quantize(CENT, rounding=ROUND_HALF_UP)
             paid_total = invoice_total
             topup = Decimal("0.00")
+            accepted_excess = Decimal("0.00")
             balance = settle(invoice_total, paid)
             if balance is None:
                 # Может быть, лишнее - это доплата НДС, а не переплата. Считаем
@@ -355,6 +659,23 @@ def main() -> int:
                 if expected is not None and paid_after_change and abs(excess - expected) <= ROUNDING_TOLERANCE:
                     topup = expected
                     paid_total = invoice_total + topup
+                    balance = Decimal("0.00")
+                else:
+                    # Переплата, принятая человеком по этому счёту. Сверяем с
+                    # суммой решения: пришли новые деньги сверх неё - счёт
+                    # снова на разбор, решение касалось прежних.
+                    accepted = accepted_differences.get(invoice_id)
+                    if accepted is not None and 0 < accepted and excess <= accepted + ROUNDING_TOLERANCE:
+                        accepted_excess = excess
+                        paid_total = paid
+                        balance = Decimal("0.00")
+            if balance is not None and balance > 0:
+                # Недоплата, прощённая человеком: клиент недодал, и этих денег
+                # не ждут. Больше прощённого - остаток показываем как есть.
+                forgiven = accepted_differences.get(invoice_id)
+                if forgiven is not None and forgiven < 0 and balance <= -forgiven + ROUNDING_TOLERANCE:
+                    accepted_excess = -balance
+                    paid_total = paid
                     balance = Decimal("0.00")
             if balance is None:
                 skipped.append(
@@ -388,13 +709,15 @@ def main() -> int:
                     if balance == 0
                     else Decimal("0.00"),
                     "vat_topup": topup,
+                    "accepted_overpayment": accepted_excess,
                 }
             )
 
         report = {
             "mode": "apply" if args.apply else "dry-run",
             "assigned_payments": len(payments),
-            "ambiguous_payments": ambiguous_payment_ids,
+            "unsplit_payments": unsplit_payments,
+            "splits": splits,
             "invoices_ready": len(changes),
             "fully_paid": sum(change["balance"] == 0 for change in changes),
             "partially_paid": sum(change["balance"] > 0 for change in changes),
@@ -419,6 +742,7 @@ def main() -> int:
                     "stage_id": change["stage_id"],
                     "rounded_off": money(change["rounded_off"]),
                     "vat_topup": money(change["vat_topup"]),
+                    "accepted_overpayment": money(change["accepted_overpayment"]),
                 }
                 for change in changes
             ],

@@ -49,14 +49,35 @@ def normalize_name(value: object) -> str:
     return re.sub(r"\s+", " ", normalized).strip()
 
 
-def same_client(deal_key: str, payment_key: str) -> bool:
-    """Только точное совпадение имени, без вхождения одного в другое.
+def normalize_tax_id(value: object) -> str:
+    """ИНН как ключ сверки: только цифры.
 
-    Вхождение обманывает на коротких названиях: «АС ООО» и «ДОК ООО» после
-    отбрасывания формы собственности дают «ас» и «док», а они сидят внутри
-    «аспэк ефимовский» и «павловский док». Платежи чужих клиентов попадали в
-    список кандидатов.
+    В выписке он приходит по-разному - с пробелами, иногда пустой строкой
+    вместо пустоты, - а сравнивать надо одно и то же.
     """
+    return re.sub(r"\D", "", str(value or ""))
+
+
+def same_client(
+    deal_key: str, payment_key: str, deal_tax_id: str = "", payment_tax_id: str = ""
+) -> bool:
+    """Один ли это клиент. ИНН решает, имя - только когда ИНН неизвестен.
+
+    ИНН у организации один, а имён много: «ГФК» и «Галичский Фанерный
+    Комбинат» - одна фирма, и по имени они не сойдутся никогда. В файле
+    платежей ИНН плательщика есть с августа 2026, и он сильнее любого
+    написания.
+
+    Если ИНН известны у обоих и они разные - это разные фирмы, и совпадение
+    имён ничего не меняет: так платёж не уедет к однофамильцу.
+
+    Без ИНН остаётся прежнее правило - **точное** совпадение имени, без
+    вхождения одного в другое. Вхождение обманывает на коротких названиях:
+    «АС ООО» и «ДОК ООО» после отбрасывания формы собственности дают «ас» и
+    «док», а они сидят внутри «аспэк ефимовский» и «павловский док».
+    """
+    if deal_tax_id and payment_tax_id:
+        return deal_tax_id == payment_tax_id
     return bool(deal_key) and deal_key == payment_key
 
 
@@ -69,7 +90,8 @@ def main() -> int:
     with psycopg.connect(args.database_url, row_factory=dict_row) as connection:
         deals = connection.execute(
             """
-            select d.id, c.name as customer, d.original_document_type as document_type,
+            select d.id, c.name as customer, c.tax_id as customer_tax_id,
+                   d.original_document_type as document_type,
                    d.original_document_number as document_number,
                    d.source_payload->>'paidAmount' as file_paid,
                    coalesce((
@@ -87,7 +109,8 @@ def main() -> int:
 
         free_payments = connection.execute(
             """
-            select p.id, p.payment_date, p.amount_rub, p.raw_counterparty, p.description
+            select p.id, p.payment_date, p.amount_rub, p.raw_counterparty,
+                   p.payer_tax_id, p.description
             from payments p
             where p.source = 'payment_battery'
               and p.direction = 'inflow'
@@ -98,6 +121,7 @@ def main() -> int:
         ).fetchall()
         for payment in free_payments:
             payment["key"] = normalize_name(payment["raw_counterparty"])
+            payment["tax_id"] = normalize_tax_id(payment["payer_tax_id"])
             text = payment["description"] or ""
             payment["invoices"] = {int(value) for value in INVOICE_RE.findall(text)}
             payment["specs"] = {str(value).strip() for value in SPEC_RE.findall(text)}
@@ -105,7 +129,12 @@ def main() -> int:
         plan: list[tuple[dict, list[dict]]] = []
         for deal in deals:
             deal_key = normalize_name(deal["customer"])
-            theirs = [p for p in free_payments if same_client(deal_key, p["key"])]
+            deal_tax_id = normalize_tax_id(deal["customer_tax_id"])
+            theirs = [
+                p
+                for p in free_payments
+                if same_client(deal_key, p["key"], deal_tax_id, p["tax_id"])
+            ]
             try:
                 # в source_payload сумма лежит числом с плавающей точкой:
                 # 5290216.0200000005 - без округления итог никогда не сойдётся
